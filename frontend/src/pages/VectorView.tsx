@@ -84,7 +84,7 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
     <>
       <PageHead
         title="向量库"
-        desc="查看 Milvus 集合状态与已写入的向量样本。二维投影散点图（UMAP）排在 P1。"
+        desc="查看 pgvector 表状态与已写入的向量样本。二维投影散点图（UMAP）排在 P1。"
         extra={
           <Select
             value={novelId || undefined}
@@ -108,7 +108,7 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
           <Stat
             label="后端"
             value={stats?.vector_backend || data?.backend || '-'}
-            foot="Milvus 3.0 · COSINE"
+            foot="pgvector · HNSW · COSINE"
           />
         </Col>
         <Col xs={24} sm={12} xl={6}>

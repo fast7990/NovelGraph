@@ -40,7 +40,14 @@ export type Citation = {
   score: number
   snippet: string
   content?: string
+  /** 这一块被哪几路召回、在各路排第几，如 {dense: 3, lexical: 1} */
+  channels?: Record<string, number>
+  rerank_score?: number | null
+  rrf_score?: number
 }
+
+/** 检索模式：两路都有 → hybrid；只挂一路 → dense_only / sparse_only；都挂 → empty */
+export type RetrievalMode = 'hybrid' | 'dense_only' | 'sparse_only' | 'empty'
 
 export type Chunk = {
   id: string

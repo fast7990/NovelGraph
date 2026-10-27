@@ -79,7 +79,7 @@ export default function App() {
               <div className="brand-mark">RAG</div>
               <div>
                 <div className="brand-title">小说知识中台</div>
-                <div className="brand-sub">Milvus 3.0 · P0</div>
+                <div className="brand-sub">PostgreSQL + pgvector</div>
               </div>
             </div>
           }

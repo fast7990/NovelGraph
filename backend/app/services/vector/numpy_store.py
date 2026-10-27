@@ -1,7 +1,7 @@
-"""numpy 向量兜底库：Milvus 不可达时保证链路可跑。
+"""numpy 向量兜底库：pgvector 不可达时保证链路可跑。
 
 把每个 novel 的向量落成 npz，检索用余弦暴力扫。数十万条以内可用，
-它的存在意义是"断网/未开通 Milvus 时也能验收 P0 流程"，不是生产方案。
+它的存在意义是"PG 连不上或扩展没装时也能验收基础流程"，不是生产方案。
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ class NumpyVectorStore:
     def __init__(self) -> None:
         self.dir = BASE_DIR / "data" / "vectors"
         self.dir.mkdir(parents=True, exist_ok=True)
-        self._dim = settings.milvus_dim
+        self._dim = settings.embedding_dim
         self._cache: dict[str, tuple[np.ndarray, list[dict]]] = {}
 
     def _paths(self, novel_id: str) -> tuple[Path, Path]:

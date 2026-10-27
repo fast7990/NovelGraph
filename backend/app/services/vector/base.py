@@ -1,4 +1,4 @@
-"""向量库抽象。Milvus 是主实现，numpy 是断网兜底。"""
+"""向量库抽象。pgvector 是主实现，numpy 是断网兜底。"""
 
 from __future__ import annotations
 

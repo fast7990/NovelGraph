@@ -5,7 +5,7 @@ FRONTEND := frontend
 API_PORT ?= 8000
 WEB_PORT ?= 5173
 
-.PHONY: help setup sync fe-install dev be fe build test lint clean model status sample
+.PHONY: help setup sync fe-install dev be fe build test lint clean model model-rerank status sample eval db-install db-migrate db-shell
 
 help:
 	@echo "make setup     安装后端(uv)+前端(pnpm)依赖"
@@ -16,7 +16,11 @@ help:
 	@echo "make test      运行后端单元测试"
 	@echo "make model     预下载本地 Embedding 模型"
 	@echo "make sample    生成测试样本文本"
+	@echo "make eval      NOVEL=nv_xxx [BUILD=40] 检索评测（Recall@10 基线对比）"
+	@echo "make model-rerank 预下载精排模型（279MB）"
 	@echo "make status    查看服务健康状态"
+	@echo "make db-migrate 把 SQLite + Milvus 的历史数据迁到 PostgreSQL + pgvector"
+	@echo "make db-shell   连上业务库（psql）"
 
 setup: sync fe-install
 
@@ -49,11 +53,26 @@ lint:
 model:
 	cd $(BACKEND) && uv run python -c "from app.services.embedding.onnx_embedder import OnnxEmbedder; OnnxEmbedder()._load(); print('model ready')"
 
+# 精排模型（279MB）：服务启动时会在后台自动下，这里供提前预热/离线环境使用
+model-rerank:
+	cd $(BACKEND) && uv run python -c "import asyncio; from app.services.rerank.factory import warmup; asyncio.run(warmup()); print('reranker ready')"
+
+# 检索评测：NOVEL=nv_xxx BUILD=40 造题；只跑指标则不带 BUILD
+eval:
+	cd $(BACKEND) && uv run python scripts/eval_retrieval.py --novel $(NOVEL) $(if $(BUILD),--build $(BUILD)) $(if $(MODES),--modes $(MODES))
+
 sample:
 	cd data/samples && python make_sample.py --chapters 24 --chars 1500
 
 status:
 	@curl -s http://127.0.0.1:$(API_PORT)/api/v1/health | python -c "import sys,json;d=json.load(sys.stdin);print('status:',d['status']);[print(' -',x['name'],x['status']) for x in d['deps']]"
 
+# 历史数据迁移：SQLite 元数据 + Milvus 已有向量 → PostgreSQL/pgvector
+db-migrate:
+	cd $(BACKEND) && uv run python scripts/migrate_to_pg.py $(if $(FORCE),--force,) $(if $(SKIP_VECTORS),--skip-vectors,)
+
+db-shell:
+	"/d/Program Files/PostgreSQL/18/bin/psql.exe" "$${DATABASE_DSN:-postgresql://postgres@127.0.0.1:5432/novel_rag}"
+
 clean:
-	rm -rf $(FRONTEND)/dist $(BACKEND)/data/app.db $(BACKEND)/data/vectors
+	rm -rf $(FRONTEND)/dist

@@ -105,6 +105,13 @@ async def delete_novel(novel_id: str, db: AsyncSession = Depends(get_session)) -
     await db.commit()
 
     try:
+        from app.services.retrieval import lexical
+
+        await lexical.remove_novel(novel_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("删除词法索引失败 %s: %s", novel_id, exc)
+
+    try:
         from app.services.vector.factory import get_vector_store
 
         store = await get_vector_store()

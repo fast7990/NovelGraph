@@ -48,6 +48,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "session_id": session_id,
                 "citations": citations,
                 "degraded": result.degraded,
+                "mode": result.mode,
                 "retrieval": result.detail,
             },
         )
@@ -105,16 +106,15 @@ async def session_messages(session_id: str) -> dict:
 
 @router.post("/search")
 async def debug_search(req: dict) -> dict:
-    """检索调试接口：不生成答案，只看召回。用于调参和排障。"""
+    """检索调试接口：不生成答案，只看召回。
+
+    返回里带 `mode`，可以直接看出走的是 hybrid / dense_only / sparse_only / empty，
+    调参时不用猜是哪一路断了。
+    """
     novel_id = req.get("novel_id", "")
     query = req.get("query", "")
     top_k = int(req.get("top_k", 10))
     if not novel_id or not query:
         raise HTTPException(400, "novel_id / query 必填")
     result = await retrieve(novel_id, query, top_k=top_k)
-    return {
-        "query": result.query,
-        "degraded": result.degraded,
-        "detail": result.detail,
-        "items": [c.to_dict(with_content=True) for c in result.citations],
-    }
+    return result.to_dict(with_content=True)

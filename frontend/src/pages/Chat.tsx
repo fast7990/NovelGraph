@@ -2,7 +2,15 @@ import { useEffect, useRef, useState } from 'react'
 import { Avatar, Card, Chat, Empty, Resizable, Select, Tag, Typography } from '@douyinfe/semi-ui'
 import type { Message } from '@douyinfe/semi-ui/lib/es/chat/interface'
 import PageHead from '../components/PageHead'
-import { api, Citation, Novel, streamSSE } from '../api/client'
+import { api, Citation, Novel, RetrievalMode, streamSSE } from '../api/client'
+
+// 检索模式徽标：让"这次是两路融合还是单路降级"一眼可见，排查时不用翻日志
+const MODE_TAG: Record<RetrievalMode, { text: string; color: 'green' | 'amber' | 'blue' | 'red' }> = {
+  hybrid: { text: '混合检索', color: 'green' },
+  dense_only: { text: '仅向量', color: 'amber' },
+  sparse_only: { text: '仅词法', color: 'blue' },
+  empty: { text: '未命中', color: 'red' },
+}
 
 const SUGGESTIONS = [
   '这本书的主要人物有哪些？各自的身份是什么？',
@@ -42,6 +50,7 @@ export default function ChatPage({
   const [novels, setNovels] = useState<Novel[]>([])
   const [chats, setChats] = useState<Message[]>([])
   const [citeMap, setCiteMap] = useState<Record<string, Citation[]>>({})
+  const [modeMap, setModeMap] = useState<Record<string, RetrievalMode>>({})
   const [activeId, setActiveId] = useState('') // 右侧面板当前展示的引用所属消息
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sessionId, setSessionId] = useState('')
@@ -87,6 +96,7 @@ export default function ChatPage({
         (event, data) => {
           if (event === 'meta') {
             setCiteMap((prev) => ({ ...prev, [aid]: data.citations || [] }))
+            setModeMap((prev) => ({ ...prev, [aid]: (data.mode || 'hybrid') as RetrievalMode }))
             setSessionId(data.session_id || '')
           } else if (event === 'delta') {
             setChats((prev) =>
@@ -131,6 +141,7 @@ export default function ChatPage({
   }
 
   const citations = citeMap[activeId] || []
+  const retMode = modeMap[activeId]
 
   return (
     <>
@@ -220,9 +231,16 @@ export default function ChatPage({
           >
             <div className="cite-head">
               <span>引用资料</span>
-              <Tag color="grey" type="light" size="small">
-                {citations.length} 段
-              </Tag>
+              <span style={{ display: 'flex', gap: 6 }}>
+                {retMode && (
+                  <Tag color={MODE_TAG[retMode].color} type="light" size="small">
+                    {MODE_TAG[retMode].text}
+                  </Tag>
+                )}
+                <Tag color="grey" type="light" size="small">
+                  {citations.length} 段
+                </Tag>
+              </span>
             </div>
             <div className="cite-body">
               {citations.length === 0 && (
@@ -246,6 +264,25 @@ export default function ChatPage({
                     </span>
                     <span className="score">{c.score.toFixed(3)}</span>
                   </div>
+                  {c.channels && (
+                    <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                      {c.channels.dense != null && (
+                        <Tag color="blue" type="ghost" size="small">
+                          向量 #{c.channels.dense}
+                        </Tag>
+                      )}
+                      {c.channels.lexical != null && (
+                        <Tag color="teal" type="ghost" size="small">
+                          词法 #{c.channels.lexical}
+                        </Tag>
+                      )}
+                      {c.rerank_score != null && (
+                        <Tag color="purple" type="ghost" size="small">
+                          精排 {c.rerank_score.toFixed(2)}
+                        </Tag>
+                      )}
+                    </div>
+                  )}
                   <div style={{ fontWeight: 500, marginBottom: 4 }}>{c.title}</div>
                   <div className="snip">{c.snippet}…</div>
                   <Typography.Text type="tertiary" size="small" className="mono">

@@ -12,7 +12,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import delete, func, select
 
@@ -21,6 +21,7 @@ from app.db import SessionLocal
 from app.models import Chapter, Chunk, ChunkReport, Job, Novel
 from app.services.embedding.factory import get_embedder
 from app.services.ingestion import chunker, parser
+from app.services.retrieval import lexical
 from app.services.storage import get_storage
 from app.services.vector.factory import get_vector_store
 from app.workers.cancel import IngestCancelled, is_cancelled
@@ -32,7 +33,7 @@ TOKEN_BUCKETS = [0, 100, 200, 300, 400, 512, 800, 1200, 2000]
 
 
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 @dataclass
@@ -234,6 +235,14 @@ async def run_ingest(job_id: str) -> None:
             novel.chunk_count = chunk_count
             novel.status = "VECTORIZING"
             await db.commit()
+
+        # 词法索引在切片落库后立刻建，不等向量化跑完：
+        # 大书要算两三个小时，这段时间里"词法通道可用、向量通道为空"，
+        # 检索会走 sparse_only 降级模式，比完全搜不到好得多。
+        try:
+            await lexical.reindex_novel(novel_id)
+        except Exception:  # noqa: BLE001
+            logger.warning("词法索引构建失败 novel=%s", novel_id, exc_info=True)
 
         await progress.update(force=True, stage="EMBEDDING", progress=35.0)
 

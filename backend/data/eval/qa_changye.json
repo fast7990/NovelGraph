@@ -1,0 +1,155 @@
+{
+  "novel_id": "nv_1fde26e76ff14c35",
+  "items": [
+    {
+      "question": "陈默在旧船坞的梁上找到了什么物件？",
+      "gold_parent": "ck_0469e05768ea4db3",
+      "gold_chunk": "ck_f932119b57e74227",
+      "chapter_no": 6
+    },
+    {
+      "question": "老葛被救出来时手里紧紧攥着什么东西？",
+      "gold_parent": "ck_a52c6f684da54051",
+      "gold_chunk": "ck_7eb3d34518584736",
+      "chapter_no": 10
+    },
+    {
+      "question": "沈鹤带着两个人堵在了什么地方？",
+      "gold_parent": "ck_ab9d27dc13f54953",
+      "gold_chunk": "ck_819dfcab1d4449d9",
+      "chapter_no": 18
+    },
+    {
+      "question": "老葛说旧货铺的火是从哪里扔进来的？",
+      "gold_parent": "ck_a52c6f684da54051",
+      "gold_chunk": "ck_18f7f101638c4a4f",
+      "chapter_no": 10
+    },
+    {
+      "question": "搜查队在旧船坞发现了一间什么样的仓库？",
+      "gold_parent": "ck_dc618bb0eddd46af",
+      "gold_chunk": "ck_71f0e36b82f94dd0",
+      "chapter_no": 6
+    },
+    {
+      "question": "林薇薇交给陈默的便签上写着死者指甲缝里有什么？",
+      "gold_parent": "ck_f4a6b8fdb9a1469c",
+      "gold_chunk": "ck_dec962f3629542b2",
+      "chapter_no": 5
+    },
+    {
+      "question": "被追回的卷宗里缺的三页正好是什么记录？",
+      "gold_parent": "ck_2c690bb059114e5d",
+      "gold_chunk": "ck_f2f91e8e271e4c2d",
+      "chapter_no": 20
+    },
+    {
+      "question": "周正说报社接到的十七个电话里有几个很重要？",
+      "gold_parent": "ck_c1fb4e74ba234e9c",
+      "gold_chunk": "ck_d6b5cd15896f414b",
+      "chapter_no": 22
+    },
+    {
+      "question": "林薇薇判定城南河滩无名男尸的死亡时间在多久以内？",
+      "gold_parent": "ck_8c86371d66a1470b",
+      "gold_chunk": "ck_a6cc9142923243fb",
+      "chapter_no": 2
+    },
+    {
+      "question": "陈默把什么物件放在桌上推过去半寸又收回来？",
+      "gold_parent": "ck_2c690bb059114e5d",
+      "gold_chunk": "ck_0a45c90579ab4b25",
+      "chapter_no": 20
+    },
+    {
+      "question": "陈默记在本子上的那段话里，沈鹤笑着说这不算什么？",
+      "gold_parent": "ck_b5eb062bc8354598",
+      "gold_chunk": "ck_f5ee906325944a25",
+      "chapter_no": 13
+    },
+    {
+      "question": "检方决定以什么罪名起诉沈鹤？",
+      "gold_parent": "ck_f3696d3bc36d4b24",
+      "gold_chunk": "ck_bb9b195acf784b03",
+      "chapter_no": 21
+    },
+    {
+      "question": "苏晚记在本子上的那段话里，追回的卷宗缺了几页？",
+      "gold_parent": "ck_2c690bb059114e5d",
+      "gold_chunk": "ck_c825b5e66ffa4f79",
+      "chapter_no": 20
+    },
+    {
+      "question": "陈默是在哪里摸到那一枚录音笔的？",
+      "gold_parent": "ck_808c9a9b371549f8",
+      "gold_chunk": "ck_d6a4b7eb91564d5b",
+      "chapter_no": 8
+    },
+    {
+      "question": "陈默在苏晚宿舍找到的便条上写着什么内容？",
+      "gold_parent": "ck_d7fa910fc7ba4e21",
+      "gold_chunk": "ck_d0207ca8778f4dce",
+      "chapter_no": 16
+    },
+    {
+      "question": "周正把什么报告放在桌上又收回来？",
+      "gold_parent": "ck_ab9d27dc13f54953",
+      "gold_chunk": "ck_fe238c2bf00c4f59",
+      "chapter_no": 18
+    },
+    {
+      "question": "陈默在椅子下摸到了什么物件？",
+      "gold_parent": "ck_808c9a9b371549f8",
+      "gold_chunk": "ck_5358ff216a5e427a",
+      "chapter_no": 8
+    },
+    {
+      "question": "借阅登记上写的是谁的名字？",
+      "gold_parent": "ck_3f20732d772248b8",
+      "gold_chunk": "ck_86230b007fc446ef",
+      "chapter_no": 3
+    },
+    {
+      "question": "技术复原结果显示经手人是沈鹤的谁？",
+      "gold_parent": "ck_5c05f2c9e3cb4470",
+      "gold_chunk": "ck_af4ba6ff83b447ee",
+      "chapter_no": 11
+    },
+    {
+      "question": "林薇薇确认降噪后的录音声音属于谁？",
+      "gold_parent": "ck_3293d7995da14295",
+      "gold_chunk": "ck_e5857598e7dc44c0",
+      "chapter_no": 19
+    },
+    {
+      "question": "周正放在桌上的旧钥匙最后被收回来了吗？",
+      "gold_parent": "ck_d7fa910fc7ba4e21",
+      "gold_chunk": "ck_1d25717b1f054b31",
+      "chapter_no": 16
+    },
+    {
+      "question": "陈默是以什么名义进入鹤山商会的？",
+      "gold_parent": "ck_7b9745556f0c48dd",
+      "gold_chunk": "ck_add0c7bc20494fe8",
+      "chapter_no": 4
+    },
+    {
+      "question": "林薇薇在码头现场找到了什么物件？",
+      "gold_parent": "ck_d4415258767342f3",
+      "gold_chunk": "ck_6946efa20b194922",
+      "chapter_no": 1
+    },
+    {
+      "question": "陈默在废弃厂房的哪里找到了被绑住的苏晚？",
+      "gold_parent": "ck_f283836d27ec4ace",
+      "gold_chunk": "ck_e56ddf092b2a44d5",
+      "chapter_no": 17
+    },
+    {
+      "question": "沈鹤深夜拜访陈默时提出了什么条件？",
+      "gold_parent": "ck_7bac99ef7a66471a",
+      "gold_chunk": "ck_863f68bf27994e06",
+      "chapter_no": 13
+    }
+  ]
+}

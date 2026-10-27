@@ -53,7 +53,7 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
     <>
       <PageHead
         title="概览"
-        desc="P0 闭环：上传 → 解析切块 → 本地向量化 → Milvus 写入 → RAG 问答。知识图谱在 P1 接入。"
+        desc="P0 闭环：上传 → 解析切块 → 本地向量化 → pgvector 写入 → 混合检索 → RAG 问答。知识图谱在 P1 接入。"
         extra={
           <>
             <Button onClick={() => onGo('chunks')}>切片完成度</Button>
@@ -158,8 +158,8 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
               </span>
             </div>
             <div className="kv">
-              <span>Milvus 集合</span>
-              <span className="mono">{cfg.milvus_collection}</span>
+              <span>向量表</span>
+              <span className="mono">{cfg.vector_table || 'chunk_vectors'}</span>
             </div>
             <div className="kv">
               <span>LLM</span>

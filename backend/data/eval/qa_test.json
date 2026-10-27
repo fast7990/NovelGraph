@@ -1,0 +1,35 @@
+{
+  "novel_id": "nv_1fde26e76ff14c35",
+  "items": [
+    {
+      "question": "林薇薇把什么物件夹进了卷宗？",
+      "gold_parent": "ck_940e5f276adf448d",
+      "gold_chunk": "ck_c1e7067a9def4c0f",
+      "chapter_no": 24
+    },
+    {
+      "question": "老葛被救出来时手里攥着的是什么物件？",
+      "gold_parent": "ck_93aebbb67b694f6a",
+      "gold_chunk": "ck_c6e65fbc4f334577",
+      "chapter_no": 10
+    },
+    {
+      "question": "司机说车上装着的重物是什么？",
+      "gold_parent": "ck_f4f6517568884f19",
+      "gold_chunk": "ck_53c19cef45194993",
+      "chapter_no": 12
+    },
+    {
+      "question": "借阅登记上写的是谁的名字？",
+      "gold_parent": "ck_3f20732d772248b8",
+      "gold_chunk": "ck_d81cd3e70c0d4688",
+      "chapter_no": 3
+    },
+    {
+      "question": "检方决定以什么罪名起诉沈鹤？",
+      "gold_parent": "ck_f3696d3bc36d4b24",
+      "gold_chunk": "ck_72f44e02add048e2",
+      "chapter_no": 21
+    }
+  ]
+}

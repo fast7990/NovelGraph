@@ -1,14 +1,13 @@
 """向量库工厂。
 
-VECTOR_BACKEND 未显式指定时：先试 Milvus（连接 + 探测 collection），
-失败则退到 numpy，并在 /health 里标 degraded —— 宁可降级可用，
-也不要因为"库连不上"让整个 P0 验收卡住。
+P1 起默认 pgvector（向量和正文同库，少一套服务、少一类不一致）。
+保留 numpy 兜底：断网或扩展装不上时仍然能把 P0 链路跑通，
+此时检索退化为暴力扫描，`/health` 会明确标出来。
 """
 
 from __future__ import annotations
 
 import logging
-import os
 
 from app.config import settings
 from app.services.vector.base import VectorStore
@@ -19,7 +18,7 @@ _store: VectorStore | None = None
 
 
 def backend_preference() -> str:
-    return os.environ.get("VECTOR_BACKEND", "auto").lower()
+    return (settings.vector_backend or "pgvector").lower()
 
 
 async def get_vector_store() -> VectorStore:
@@ -32,30 +31,30 @@ async def get_vector_store() -> VectorStore:
         _store = _NumpyStoreProxy()
         return _store
 
-    from app.services.vector.milvus_store import MilvusVectorStore
+    from app.services.vector.pgvector_store import PgVectorStore
 
-    milvus = MilvusVectorStore()
-    if pref == "milvus":
-        _store = milvus
+    store = PgVectorStore()
+    if pref == "pgvector":
+        _store = store
         return _store
 
-    cfg_err = settings.milvus_config_error()
-    if cfg_err:
-        logger.warning("Milvus 配置异常，降级 numpy：%s", cfg_err)
-        _store = _NumpyStoreProxy()
-        return _store
-
+    # auto：先试 pgvector，起不来再退 numpy
     try:
         from app.services.embedding.factory import get_embedder
 
-        dim = get_embedder().dim
-        await milvus.ensure_ready(dim)
-        _store = milvus
-        logger.info("vector store = milvus (%s)", milvus.collection_name())
+        await store.ensure_ready(get_embedder().dim)
+        _store = store
+        logger.info("vector store = pgvector (%s)", settings.pgvector_table)
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Milvus 不可用，降级 numpy：%s", exc)
+        logger.warning("pgvector 不可用，降级 numpy 暴力扫描：%s", exc)
         _store = _NumpyStoreProxy()
     return _store
+
+
+def reset_store() -> None:
+    """测试与运维用：强制下次重新构造（改完配置不必重启进程）。"""
+    global _store
+    _store = None
 
 
 class _NumpyStoreProxy:

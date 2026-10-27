@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     logger.info(
         "启动完成 env=%s vector=%s embedding=%s threads=%s",
         settings.app_env,
-        settings.milvus_collection,
+        f"{settings.vector_backend}:{settings.pgvector_table}",
         settings.embedding_provider,
         settings.embedding_threads,
     )
@@ -64,17 +64,36 @@ async def lifespan(app: FastAPI):
 
     async def warmup() -> None:
         from app.services.llm.client import get_llm
+        from app.services.rerank.factory import warmup as rerank_warmup
+        from app.services.retrieval import lexical as lexical_index
         from app.services.vector.factory import get_vector_store
 
         try:
             store = await get_vector_store()
-            logger.info("vector backend = %s collection=%s", getattr(store, "name", "?"), settings.milvus_collection)
+            logger.info(
+                "vector backend = %s table=%s index=%s",
+                getattr(store, "name", "?"),
+                settings.pgvector_table,
+                settings.pgvector_index,
+            )
         except Exception as exc:  # noqa: BLE001
             logger.warning("向量库初始化失败：%s", exc)
         try:
             await get_llm().probe()
         except Exception as exc:  # noqa: BLE001
             logger.warning("LLM 探测失败：%s", exc)
+        # 词法索引：行数对不上就整库重建（本地 SQLite，2 万块约 2 秒）
+        try:
+            n = await lexical_index.ensure_fresh()
+            if n:
+                logger.info("词法索引重建完成 chunks=%d", n)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("词法索引自检失败：%s", exc)
+        # 精排模型：首次会下载 279MB，放后台跑，没就绪时检索自动退回 RRF 排序
+        try:
+            await rerank_warmup()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("精排预热失败：%s", exc)
 
     task = asyncio.create_task(warmup())
     yield
@@ -85,7 +104,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="长篇小说 RAG 中台",
     version="0.1.0",
-    description="原始文本 → 向量库（Milvus 3.0）→ RAG 问答；知识图谱在 P1 接入",
+    description="原始文本 → PostgreSQL + pgvector → 混合检索 → RAG 问答；知识图谱在 P1 接入",
     lifespan=lifespan,
 )
 

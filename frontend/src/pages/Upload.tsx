@@ -306,7 +306,7 @@ export default function Upload({ onGo }: { onGo: (t: any, id?: string) => void }
             <div className="kv">
               <span>向量库</span>
               <span>
-                Milvus 3.0 Serverless · {info?.milvus_collection ?? '—'}
+                PostgreSQL pgvector · {info?.vector_table ?? 'chunk_vectors'}
               </span>
             </div>
             {activeCount > 0 && (

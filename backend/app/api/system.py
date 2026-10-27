@@ -26,12 +26,12 @@ _started = time.time()
 
 @router.get("/health")
 async def health() -> dict:
-    sqlite_ok = True
+    db_ok = True
     try:
         async with SessionLocal() as db:
             await db.execute(select(func.count()).select_from(Novel))
     except Exception as exc:  # noqa: BLE001
-        sqlite_ok = False
+        db_ok = False
         logger.warning("db health failed: %s", exc)
 
     async def safe(coro, name: str) -> dict:
@@ -43,16 +43,40 @@ async def health() -> dict:
     store = await get_vector_store()
     emb = get_embedder()
     llm = get_llm()
+    from app.services.rerank.factory import get_reranker
+    from app.services.retrieval import lexical as lexical_index
+
+    reranker = get_reranker()
+
+    async def lexical_health() -> dict:
+        s = await lexical_index.stats()
+        return {
+            "name": "lexical",
+            "status": "ok" if s["ready"] else "degraded",
+            "engine": s.get("engine", "postgres-tsvector"),
+            "indexed": s["indexed"],
+            "child_chunks": s["child_chunks"],
+        }
+
     results = await asyncio.gather(
         safe(store.health(), "vector"),
         safe(emb.health(), "embedding"),
         safe(llm.health(), "llm"),
+        safe(lexical_health(), "lexical"),
+        safe(reranker.health(), "rerank"),
     )
-    deps = [{"name": "database", "status": "ok" if sqlite_ok else "down"}, *results]
+    deps = [
+        {
+            "name": "database",
+            "status": "ok" if db_ok else "down",
+            "engine": settings.database_url.split("://")[0],
+        },
+        *results,
+    ]
     overall = "ok"
     if any(d.get("status") == "down" for d in deps):
         overall = "degraded"
-    if not sqlite_ok:
+    if not db_ok:
         overall = "down"
 
     return {
@@ -68,9 +92,12 @@ async def health() -> dict:
             "embedding_threads": settings.embedding_threads,
             "llm_model": settings.llm_model,
             "llm_base_url": settings.llm_base_url,
-            "milvus_collection": settings.milvus_collection,
+            "vector_table": settings.pgvector_table,
+            "vector_index": settings.pgvector_index,
             "chunk_child_size": settings.chunk_child_size,
             "chunk_parent_size": settings.chunk_parent_size,
+            "retrieval_mode": "hybrid" if settings.lexical_enabled else "dense",
+            "rerank": reranker.ready,
         },
         "deps": deps,
     }
@@ -90,6 +117,13 @@ async def stats() -> dict:
         vector_count = await store.count()
     except Exception:  # noqa: BLE001
         vector_count = -1
+    from app.services.rerank.factory import get_reranker
+    from app.services.retrieval import lexical as lexical_index
+
+    try:
+        lex = await lexical_index.stats()
+    except Exception:  # noqa: BLE001
+        lex = {"indexed": -1, "child_chunks": -1, "ready": False}
     return {
         "novels": novel_count,
         "chunks": chunk_count,
@@ -100,5 +134,9 @@ async def stats() -> dict:
         "embedding_dim": settings.embedding_dim,
         "embedding_model": settings.embedding_model,
         "embedding_threads": settings.embedding_threads,
-        "milvus_collection": settings.milvus_collection,
+        "vector_table": settings.pgvector_table,
+        "lexical_indexed": lex["indexed"],
+        "lexical_ready": lex["ready"],
+        "rerank_model": settings.rerank_model,
+        "rerank_ready": get_reranker().ready,
     }
