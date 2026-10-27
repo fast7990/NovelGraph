@@ -23,6 +23,7 @@ from app.services.embedding.factory import get_embedder
 from app.services.ingestion import chunker, parser
 from app.services.storage import get_storage
 from app.services.vector.factory import get_vector_store
+from app.workers.cancel import IngestCancelled, is_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,8 @@ async def run_ingest(job_id: str) -> None:
         total = len(embed_pool)
         written = 0
         for i in range(0, total, EMBED_ROWS_PER_BATCH):
+            if is_cancelled(novel_id):          # 书被删了就别再烧 CPU
+                raise IngestCancelled(novel_id)
             batch = embed_pool[i : i + EMBED_ROWS_PER_BATCH]
             vectors = await embedder.embed_documents([b["content"] for b in batch])
             rows = []
@@ -319,8 +322,12 @@ async def run_ingest(job_id: str) -> None:
             await db.commit()
 
 
-async def rebuild_vectors(novel_id: str, job_id: str) -> None:
-    """只重算向量，不重新解析切片（切片很贵，向量便宜）。"""
+async def rebuild_vectors(novel_id: str, job_id: str, resume: bool = True) -> None:
+    """只重算向量，不重新解析切片（切片很贵，向量便宜）。
+
+    resume=True 时跳过库里已有的 chunk：一本书百万字级要跑一两个小时，
+    中途重启或改配置后重来一次的成本太高。只有显式 force 才清空重写。
+    """
     async with SessionLocal() as db:
         job = await db.get(Job, job_id)
         job.status = "RUNNING"
@@ -335,11 +342,29 @@ async def rebuild_vectors(novel_id: str, job_id: str) -> None:
     embedder = get_embedder()
     store = await get_vector_store()
     await store.ensure_ready(embedder.dim)
-    await store.delete_novel(novel_id)
+
+    total_all = len(rows)
+    skipped = 0
+    if resume:
+        done = await store.existing_ids(novel_id)
+        if done:
+            rows = [r for r in rows if r.id not in done]
+            skipped = total_all - len(rows)
+            logger.info("续跑 %s：已完成 %d/%d，本次处理 %d", novel_id, skipped, total_all, len(rows))
+    else:
+        await store.delete_novel(novel_id)
+
+    if skipped:
+        await progress.update(
+            progress=95.0 * skipped / max(total_all, 1),
+            stats={"resumed_skipped": skipped},
+        )
 
     written = 0
     done_chars = 0
     for i in range(0, len(rows), EMBED_ROWS_PER_BATCH):
+        if is_cancelled(novel_id):              # 书被删了就别再烧 CPU
+            raise IngestCancelled(novel_id)
         batch = rows[i : i + EMBED_ROWS_PER_BATCH]
         vectors = await embedder.embed_documents([r.content for r in batch])
         payload = [
@@ -364,7 +389,7 @@ async def rebuild_vectors(novel_id: str, job_id: str) -> None:
             chars_done=min(done_chars, int(total_chars)),
             chars_total=int(total_chars),
             vectors_written=written,
-            progress=95.0 * (min(i + EMBED_ROWS_PER_BATCH, len(rows)) / max(len(rows), 1)),
+            progress=95.0 * (min(skipped + i + EMBED_ROWS_PER_BATCH, total_all) / max(total_all, 1)),
         )
 
     async with SessionLocal() as db:
@@ -372,8 +397,12 @@ async def rebuild_vectors(novel_id: str, job_id: str) -> None:
         job.status = "COMPLETED"
         job.stage = "COMPLETED"
         job.progress = 100.0
-        job.vectors_written = written
+        job.vectors_written = written + skipped
         job.chars_done = int(total_chars)
         job.chars_total = int(total_chars)
         job.finished_at = _utcnow()
+        stats = dict(job.stats or {})
+        stats["vectors_written"] = written
+        stats["resumed_skipped"] = skipped
+        job.stats = stats
         await db.commit()

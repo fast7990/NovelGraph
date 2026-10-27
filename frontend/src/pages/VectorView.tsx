@@ -1,5 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
+import { Banner, Card, Col, Empty, Row, Select, Table, Tag, Typography } from '@douyinfe/semi-ui'
+import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
+import PageHead from '../components/PageHead'
 import { api, fmtNum, Novel } from '../api/client'
+
+function Stat({ label, value, foot }: { label: string; value: React.ReactNode; foot?: React.ReactNode }) {
+  return (
+    <Card bodyStyle={{ padding: '16px 18px' }} style={{ height: '100%' }}>
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">{value}</div>
+      <div className="stat-foot">{foot}</div>
+    </Card>
+  )
+}
 
 export default function VectorView({ novelId, onPick }: { novelId: string; onPick: (id: string) => void }) {
   const [novels, setNovels] = useState<Novel[]>([])
@@ -24,55 +37,100 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
     const items: any[] = data?.items || []
     const map: Record<number, number> = {}
     for (const it of items) map[it.chapter_no] = (map[it.chapter_no] || 0) + 1
-    return Object.entries(map).slice(0, 40).map(([k, v]) => ({ chapter: Number(k), count: v }))
+    return Object.entries(map)
+      .slice(0, 40)
+      .map(([k, v]) => ({ chapter: Number(k), count: v }))
   }, [data])
 
   const maxCount = Math.max(1, ...byChapter.map((b) => b.count))
 
+  const columns: ColumnProps<any>[] = [
+    {
+      title: 'chunk_id',
+      dataIndex: 'id',
+      width: 280,
+      render: (v: string) => <div className="mono ellipsis" style={{ maxWidth: 260 }}>{v}</div>,
+    },
+    { title: '章节', dataIndex: 'chapter_no', width: 80, render: (v: number) => <span className="mono">{v}</span> },
+    { title: '序', dataIndex: 'seq', width: 64, render: (v: number) => <span className="mono">{v}</span> },
+    {
+      title: '层级',
+      dataIndex: 'level',
+      width: 76,
+      render: (v: number) => (
+        <Tag color={v === 1 ? 'grey' : 'blue'} type="light" size="small">
+          {v === 1 ? '子' : '父'}
+        </Tag>
+      ),
+    },
+    {
+      title: '字符区间',
+      dataIndex: 'char_start',
+      width: 140,
+      render: (_: any, it: any) => (
+        <span className="mono">
+          {it.char_start}-{it.char_end}
+        </span>
+      ),
+    },
+    {
+      title: 'parent',
+      dataIndex: 'parent_id',
+      render: (v: string) => <div className="mono ellipsis" style={{ maxWidth: 260 }}>{v || '-'}</div>,
+    },
+  ]
+
   return (
     <>
-      <div className="page-head row between" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <h1>向量库</h1>
-          <p>查看 Milvus 集合状态与已写入的向量样本。二维投影散点图（UMAP）排在 P1。</p>
-        </div>
-        <select className="input" style={{ width: 260 }} value={novelId} onChange={(e) => onPick(e.target.value)}>
-          <option value="">选择小说…</option>
-          {novels.map((n) => (
-            <option key={n.id} value={n.id}>{n.title || n.filename}</option>
-          ))}
-        </select>
-      </div>
+      <PageHead
+        title="向量库"
+        desc="查看 Milvus 集合状态与已写入的向量样本。二维投影散点图（UMAP）排在 P1。"
+        extra={
+          <Select
+            value={novelId || undefined}
+            onChange={(v) => onPick(String(v))}
+            style={{ width: 260 }}
+            placeholder="选择小说…"
+          >
+            {novels.map((n) => (
+              <Select.Option key={n.id} value={n.id}>
+                {n.title || n.filename}
+              </Select.Option>
+            ))}
+          </Select>
+        }
+      />
 
-      {err && <div className="err-box" style={{ marginBottom: 14 }}>{err}</div>}
+      {err && <Banner type="danger" closeIcon={null} description={err} style={{ marginBottom: 16 }} />}
 
-      <div className="grid cols-4">
-        <div className="card">
-          <div className="stat-label">后端</div>
-          <div className="stat-value" style={{ fontSize: 20 }}>{stats?.vector_backend || data?.backend || '-'}</div>
-          <div className="stat-label">Milvus 3.0 · COSINE</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">全库向量</div>
-          <div className="stat-value">{stats ? fmtNum(stats.vectors) : '-'}</div>
-          <div className="stat-label">跨所有小说</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">本书样本</div>
-          <div className="stat-value">{data ? data.count : '-'}</div>
-          <div className="stat-label">拉取上限 400 条</div>
-        </div>
-        <div className="card">
-          <div className="stat-label">向量维度</div>
-          <div className="stat-value">{stats || data ? 512 : '-'}</div>
-          <div className="stat-label">bge-small-zh-v1.5</div>
-        </div>
-      </div>
+      <Row gutter={[16, 16]}>
+        <Col xs={24} sm={12} xl={6}>
+          <Stat
+            label="后端"
+            value={stats?.vector_backend || data?.backend || '-'}
+            foot="Milvus 3.0 · COSINE"
+          />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <Stat label="全库向量" value={stats ? fmtNum(stats.vectors) : '-'} foot="跨所有小说" />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <Stat label="本书样本" value={data ? data.count : '-'} foot="拉取上限 400 条" />
+        </Col>
+        <Col xs={24} sm={12} xl={6}>
+          <Stat
+            label="向量维度"
+            value={stats?.embedding_dim ?? data?.dim ?? '-'}
+            foot={stats?.embedding_model?.split('/').pop() ?? '—'}
+          />
+        </Col>
+      </Row>
 
-      <div className="card section-gap">
-        <div className="card-title">按章节分布（样本）</div>
+      <Card title="按章节分布（样本）" style={{ marginTop: 16 }}>
         <div className="hist" style={{ height: 150 }}>
-          {byChapter.length === 0 && <div className="muted">暂无数据</div>}
+          {byChapter.length === 0 && (
+            <Typography.Text type="tertiary">暂无数据</Typography.Text>
+          )}
           {byChapter.map((b) => (
             <div className="hist-col" key={b.chapter} title={`第 ${b.chapter} 章：${b.count} 块`}>
               <span className="hist-n">{b.count}</span>
@@ -81,29 +139,18 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
             </div>
           ))}
         </div>
-      </div>
+      </Card>
 
-      <div className="card pad-0 section-gap">
-        <div className="card-title" style={{ padding: '16px 20px 0' }}>向量记录样本</div>
-        <table style={{ marginTop: 10 }}>
-          <thead>
-            <tr><th>chunk_id</th><th>章节</th><th>序</th><th>层级</th><th>字符区间</th><th>parent</th></tr>
-          </thead>
-          <tbody>
-            {(data?.items || []).slice(0, 30).map((it: any) => (
-              <tr key={it.id}>
-                <td className="mono ellipsis" style={{ maxWidth: 240 }}>{it.id}</td>
-                <td className="mono">{it.chapter_no}</td>
-                <td className="mono">{it.seq}</td>
-                <td><span className="badge gray">{it.level === 1 ? '子' : it.level}</span></td>
-                <td className="mono">{it.char_start}-{it.char_end}</td>
-                <td className="mono ellipsis" style={{ maxWidth: 200 }}>{it.parent_id || '-'}</td>
-              </tr>
-            ))}
-            {!data?.items?.length && <tr><td colSpan={6}><div className="empty">暂无向量</div></td></tr>}
-          </tbody>
-        </table>
-      </div>
+      <Card title="向量记录样本" style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }}>
+        <Table
+          columns={columns}
+          dataSource={(data?.items || []).slice(0, 30)}
+          rowKey="id"
+          size="small"
+          pagination={false}
+          empty={<Empty title="暂无向量" description="这本书还没有写入向量" />}
+        />
+      </Card>
     </>
   )
 }

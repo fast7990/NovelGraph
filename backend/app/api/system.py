@@ -97,4 +97,8 @@ async def stats() -> dict:
         "vectors": vector_count,
         "running_jobs": running,
         "vector_backend": getattr(store, "name", "?"),
+        "embedding_dim": settings.embedding_dim,
+        "embedding_model": settings.embedding_model,
+        "embedding_threads": settings.embedding_threads,
+        "milvus_collection": settings.milvus_collection,
     }

@@ -18,6 +18,17 @@ data/uploads/
 data/vectors/
 data/chat_sse.txt
 
+# 开发期探针与压测产物（模拟数据，随手可再生成，不入库）
+/data/*.json
+/data/*.txt
+backend/data/bench*.txt
+backend/data/real_chunks.json
+backend/data/*.log
+*.log
+
+# 大体积样本原文（本地素材，不入库）
+data/samples/*
+
 # 密钥
 backend/.env
 .env
@@ -26,3 +37,6 @@ backend/.env
 # 系统
 .DS_Store
 Thumbs.db
+
+# 验证截图
+shots/

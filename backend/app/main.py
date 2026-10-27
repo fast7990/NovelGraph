@@ -37,6 +37,7 @@ FRONTEND_DIST = Path(__file__).resolve().parent.parent.parent / "frontend" / "di
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
+    await runner.recover_stale()  # 先把上一次残留的 RUNNING 任务翻成 FAILED，再起 worker
     runner.start()
     logger.info(
         "启动完成 env=%s vector=%s embedding=%s threads=%s",
@@ -45,21 +46,29 @@ async def lifespan(app: FastAPI):
         settings.embedding_provider,
         settings.embedding_threads,
     )
-    # 预热放到后台：模型加载 1-3s，不能挡住 first request
+    # Embedder 同步预热：模型缺失或维度与配置不符属于致命错误，
+    # 必须让启动失败。丢到后台 task 里会被 except 吞掉，服务照常起来，
+    # 等到第一次入库才炸，排查成本高得多。大模型加载 2-5s，这个代价值得。
+    from app.services.embedding.errors import FatalModelError
+    from app.services.embedding.factory import get_embedder
+
+    try:
+        emb = get_embedder()
+        await emb.embed_query("预热")
+        logger.info("embedding 预热完成 model=%s dim=%s", settings.embedding_model, emb.dim)
+    except FatalModelError as exc:
+        logger.critical("Embedding 配置错误，拒绝启动：%s", exc)
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("embedding 预热失败：%s", exc)
+
     async def warmup() -> None:
-        from app.services.embedding.factory import get_embedder
         from app.services.llm.client import get_llm
         from app.services.vector.factory import get_vector_store
 
         try:
-            emb = get_embedder()
-            await emb.embed_query("预热")
-            logger.info("embedding 预热完成 dim=%s", emb.dim)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("embedding 预热失败：%s", exc)
-        try:
             store = await get_vector_store()
-            logger.info("vector backend = %s", getattr(store, "name", "?"))
+            logger.info("vector backend = %s collection=%s", getattr(store, "name", "?"), settings.milvus_collection)
         except Exception as exc:  # noqa: BLE001
             logger.warning("向量库初始化失败：%s", exc)
         try:

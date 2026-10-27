@@ -1,8 +1,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  Button,
+  Card,
+  Col,
+  Empty,
+  Input,
+  Row,
+  Select,
+  SideSheet,
+  Table,
+  Tag,
+  Typography,
+} from '@douyinfe/semi-ui'
+import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
+import PageHead from '../components/PageHead'
 import { api, Chunk, ChunkReport, fmtNum, Novel } from '../api/client'
 
 const SEV_LABEL: Record<string, string> = { info: '提示', warn: '警告', error: '严重' }
-const SEV_CLASS: Record<string, string> = { info: 'gray', warn: 'orange', error: 'red' }
+const SEV_COLOR = { info: 'grey', warn: 'amber', error: 'red' } as const
 
 const CODE_DESC: Record<string, string> = {
   NO_CHAPTER_STRUCTURE: '未识别到章节结构',
@@ -14,6 +29,32 @@ const CODE_DESC: Record<string, string> = {
   OVERLAP_ANOMALY: '重叠异常',
   DUP_CHUNK: '重复块',
   ENCODING_SUSPECT: '编码疑似错误',
+}
+
+function Stat({
+  label,
+  value,
+  unit,
+  foot,
+  children,
+}: {
+  label: string
+  value: React.ReactNode
+  unit?: string
+  foot?: React.ReactNode
+  children?: React.ReactNode
+}) {
+  return (
+    <Card bodyStyle={{ padding: '16px 18px' }} style={{ height: '100%' }}>
+      <div className="stat-label">{label}</div>
+      <div className="stat-value">
+        {value}
+        {unit && <span className="stat-unit">{unit}</span>}
+      </div>
+      {children}
+      <div className="stat-foot">{foot}</div>
+    </Card>
+  )
 }
 
 export default function ChunkReview({ novelId, onPick }: { novelId: string; onPick: (id: string) => void }) {
@@ -40,7 +81,9 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
     if (!novelId) return
     try {
       setReport(await api.chunkReport(novelId))
-    } catch { /* 可能正在切片 */ }
+    } catch {
+      /* 可能正在切片 */
+    }
   }, [novelId])
 
   const loadChunks = useCallback(async () => {
@@ -70,211 +113,325 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
   const histMax = Math.max(1, ...(report?.token_hist || [1]))
   const running = novel && ['PROCESSING', 'PENDING', 'VECTORIZING'].includes(novel.status)
 
+  const issueColumns: ColumnProps<any>[] = [
+    {
+      title: '章节',
+      dataIndex: 'chapter_no',
+      width: 80,
+      render: (v: number) => <span className="mono">{v || '-'}</span>,
+    },
+    {
+      title: '级别',
+      dataIndex: 'severity',
+      width: 90,
+      render: (v: string) => (
+        <Tag color={SEV_COLOR[v as keyof typeof SEV_COLOR] || 'grey'} type="light" size="small">
+          {SEV_LABEL[v] || v}
+        </Tag>
+      ),
+    },
+    {
+      title: '说明',
+      dataIndex: 'code',
+      render: (v: string, it: any) => (
+        <>
+          <div>{CODE_DESC[v] || v}</div>
+          <Typography.Text type="tertiary" size="small">
+            {it.detail}
+          </Typography.Text>
+        </>
+      ),
+    },
+    {
+      title: '位置',
+      dataIndex: 'char_start',
+      width: 110,
+      align: 'right',
+      render: (v: number) => <span className="mono">@{v}</span>,
+    },
+  ]
+
+  const chunkColumns: ColumnProps<Chunk>[] = [
+    { title: '章', dataIndex: 'chapter_no', width: 64, render: (v: number) => <span className="mono">{v}</span> },
+    { title: '序', dataIndex: 'seq', width: 56, render: (v: number) => <span className="mono">{v}</span> },
+    {
+      title: '层级',
+      dataIndex: 'level',
+      width: 74,
+      render: (v: number) => (
+        <Tag color={v === 0 ? 'blue' : 'grey'} type="light" size="small">
+          {v === 0 ? '父' : '子'}
+        </Tag>
+      ),
+    },
+    {
+      title: '内容',
+      dataIndex: 'content',
+      render: (v: string) => <div className="ellipsis" style={{ maxWidth: 620 }}>{v.slice(0, 90)}</div>,
+    },
+    {
+      title: 'token',
+      dataIndex: 'token_est',
+      width: 80,
+      align: 'right',
+      render: (v: number) => <span className="mono">{v}</span>,
+    },
+  ]
+
   return (
     <>
-      <div className="page-head row between" style={{ alignItems: 'flex-start' }}>
-        <div>
-          <h1>切片完成度</h1>
-          <p>进度按「已切字符 / 总字符」计算 —— 块数在流式切分中事前未知，用它算会出现越跑越退的假进度。</p>
-        </div>
-        <select className="input" style={{ width: 260 }} value={novelId} onChange={(e) => { onPick(e.target.value); setPage(1) }}>
-          <option value="">选择小说…</option>
-          {novels.map((n) => (
-            <option key={n.id} value={n.id}>{n.title || n.filename}</option>
-          ))}
-        </select>
-      </div>
+      <PageHead
+        title="切片完成度"
+        desc="进度按「已切字符 / 总字符」计算 —— 块数在流式切分中事前未知，用它算会出现越跑越退的假进度。"
+        extra={
+          <Select
+            value={novelId || undefined}
+            onChange={(v) => {
+              onPick(String(v))
+              setPage(1)
+            }}
+            style={{ width: 260 }}
+            placeholder="选择小说…"
+          >
+            {novels.map((n) => (
+              <Select.Option key={n.id} value={n.id}>
+                {n.title || n.filename}
+              </Select.Option>
+            ))}
+          </Select>
+        }
+      />
 
-      {!novelId && <div className="card"><div className="empty">先选择一本小说</div></div>}
+      {!novelId && (
+        <Card>
+          <Empty title="先选择一本小说" description="左侧下拉里挑一本已入库的书" />
+        </Card>
+      )}
 
       {novelId && report && (
         <>
-          <div className="grid cols-4">
-            <div className="card">
-              <div className="stat-label">切块完成度</div>
-              <div className="stat-value">{(report.completeness * 100).toFixed(1)}<span className="stat-unit">%</span></div>
-              <div className="bar ok" style={{ marginTop: 10 }}>
-                <i style={{ width: `${report.completeness * 100}%` }} />
-              </div>
-              <div className="stat-label" style={{ marginTop: 6 }}>
-                {fmtNum(report.covered_chars)} / {fmtNum(report.char_count)} 字已覆盖
-              </div>
-            </div>
-            <div className="card">
-              <div className="stat-label">切片数量</div>
-              <div className="stat-value">{fmtNum(report.chunk_count)}</div>
-              <div className="stat-label">父块 {fmtNum(report.parent_count)} · 子块 {fmtNum(report.chunk_count)}</div>
-            </div>
-            <div className="card">
-              <div className="stat-label">块长度</div>
-              <div className="stat-value">{report.avg_tokens}<span className="stat-unit">tok 均值</span></div>
-              <div className="stat-label">P95 {report.p95_tokens} tok（上限 512）</div>
-            </div>
-            <div className="card">
-              <div className="stat-label">质量告警</div>
-              <div className="stat-value" style={{ color: report.issues.length ? '#d97706' : '#12a150' }}>
-                {report.issues.length}
-              </div>
-              <div className="stat-label">
-                严重 {report.issues_by_severity?.error || 0} · 警告 {report.issues_by_severity?.warn || 0}
-              </div>
-            </div>
-          </div>
-
-          <div className="grid cols-2 section-gap">
-            <div className="card">
-              <div className="card-title">
-                阶段进度
-                <button className="btn sm" onClick={async () => { await api.rebuild(novelId); loadReport() }}>重跑全流程</button>
-              </div>
-              <div className="progress-row">
-                <span className="label">解析分章</span>
-                <div className="bar"><i style={{ width: report.chapter_count ? '100%' : '0%' }} /></div>
-                <span className="value">{report.chapter_count} 章</span>
-              </div>
-              <div className="progress-row">
-                <span className="label">切块覆盖</span>
-                <div className="bar"><i style={{ width: `${report.completeness * 100}%` }} /></div>
-                <span className="value">{(report.completeness * 100).toFixed(1)}%</span>
-              </div>
-              <div className="progress-row">
-                <span className="label">向量化</span>
-                <div className="bar">
-                  <i style={{ width: `${novel ? Math.min(100, (novel.chunk_count ? 100 : 0)) : 0}%` }} />
-                </div>
-                <span className="value">{report.chunk_count} 条</span>
-              </div>
-              <p className="muted" style={{ marginTop: 10, marginBottom: 0 }}>
-                {running
-                  ? '任务进行中：数字每 4 秒刷新一次，可切到「上传」页看实时 SSE 进度。'
-                  : '已完成。若改了切块参数，点「重跑全流程」会先清空旧切片再重建，不会产生重复数据。'}
-              </p>
-            </div>
-
-            <div className="card">
-              <div className="card-title">子块长度分布（token 估算）</div>
-              <div className="hist">
-                {report.token_hist.map((v, i) => (
-                  <div className="hist-col" key={i}>
-                    <span className="hist-n">{v}</span>
-                    <div className="hist-bar" style={{ height: `${(v / histMax) * 100}%` }} />
-                    <span className="hist-x">{report.token_buckets[i]}+</span>
+          <Row gutter={[16, 16]}>
+            <Col xs={24} sm={12} xl={6}>
+              <Stat
+                label="切块完成度"
+                value={(report.completeness * 100).toFixed(1)}
+                unit="%"
+                foot={`${fmtNum(report.covered_chars)} / ${fmtNum(report.char_count)} 字已覆盖`}
+              >
+                <div style={{ margin: '8px 0 2px' }}>
+                  <div
+                    style={{
+                      height: 6,
+                      borderRadius: 99,
+                      background: 'var(--semi-color-fill-1)',
+                      overflow: 'hidden',
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: `${report.completeness * 100}%`,
+                        height: '100%',
+                        background: 'var(--semi-color-success)',
+                        transition: 'width .35s ease',
+                      }}
+                    />
                   </div>
-                ))}
-              </div>
-              <p className="muted" style={{ marginBottom: 0 }}>
-                落在 512 之后的块会被 embedding 截断，是需要处理的信号。
-              </p>
-            </div>
-          </div>
+                </div>
+              </Stat>
+            </Col>
+            <Col xs={24} sm={12} xl={6}>
+              <Stat
+                label="切片数量"
+                value={fmtNum(report.chunk_count)}
+                foot={`父块 ${fmtNum(report.parent_count)} · 子块 ${fmtNum(report.chunk_count)}`}
+              />
+            </Col>
+            <Col xs={24} sm={12} xl={6}>
+              <Stat
+                label="块长度"
+                value={report.avg_tokens}
+                unit="tok 均值"
+                foot={`P95 ${report.p95_tokens} tok（上限 512）`}
+              />
+            </Col>
+            <Col xs={24} sm={12} xl={6}>
+              <Stat
+                label="质量告警"
+                value={report.issues.length}
+                foot={`严重 ${report.issues_by_severity?.error || 0} · 警告 ${report.issues_by_severity?.warn || 0}`}
+              />
+            </Col>
+          </Row>
+
+          <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
+            <Col xs={24} xl={12}>
+              <Card
+                title="阶段进度"
+                headerExtraContent={
+                  <Button size="small" onClick={async () => { await api.rebuild(novelId); loadReport() }}>
+                    重跑全流程
+                  </Button>
+                }
+                style={{ height: '100%' }}
+              >
+                <div className="kv">
+                  <span>解析分章</span>
+                  <span>{report.chapter_count} 章</span>
+                </div>
+                <div className="kv">
+                  <span>切块覆盖</span>
+                  <span>{(report.completeness * 100).toFixed(1)}%</span>
+                </div>
+                <div className="kv">
+                  <span>向量化</span>
+                  <span>{report.chunk_count} 条</span>
+                </div>
+                <Typography.Paragraph type="tertiary" size="small" style={{ marginTop: 12, marginBottom: 0 }}>
+                  {running
+                    ? '任务进行中：数字每 4 秒刷新一次，可切到「数据上传」页看实时进度。'
+                    : '已完成。若改了切块参数，点「重跑全流程」会先清空旧切片再重建，不会产生重复数据。'}
+                </Typography.Paragraph>
+              </Card>
+            </Col>
+
+            <Col xs={24} xl={12}>
+              <Card title="子块长度分布（token 估算）" style={{ height: '100%' }}>
+                {report.chunk_count === 0 ? (
+                  <Empty title="还没有切片" description="切块完成后这里会显示长度分布" style={{ padding: '24px 0' }} />
+                ) : (
+                  <div className="hist">
+                    {report.token_hist.map((v, i) => (
+                      <div className="hist-col" key={i}>
+                        <span className="hist-n">{v}</span>
+                        <div className="hist-bar" style={{ height: `${(v / histMax) * 100}%` }} />
+                        <span className="hist-x">{report.token_buckets[i]}+</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Typography.Paragraph type="tertiary" size="small" style={{ marginBottom: 0 }}>
+                  落在 512 之后的块会被 embedding 截断，是需要处理的信号。
+                </Typography.Paragraph>
+              </Card>
+            </Col>
+          </Row>
 
           {report.issues.length > 0 && (
-            <div className="card pad-0 section-gap">
-              <div className="card-title" style={{ padding: '16px 20px 0' }}>
-                质量告警（{report.issues.length}）
-                <span className="muted">按章节 / 类型排序，前 200 条</span>
-              </div>
-              <table style={{ marginTop: 10 }}>
-                <thead>
-                  <tr><th style={{ width: 70 }}>章节</th><th style={{ width: 90 }}>类型</th><th>说明</th><th style={{ width: 110 }}>原文位置</th></tr>
-                </thead>
-                <tbody>
-                  {report.issues.map((it, i) => (
-                    <tr key={i}>
-                      <td className="mono">{it.chapter_no || '-'}</td>
-                      <td><span className={`badge ${SEV_CLASS[it.severity]}`}>{SEV_LABEL[it.severity]}</span></td>
-                      <td>
-                        <div>{CODE_DESC[it.code] || it.code}</div>
-                        <div className="muted">{it.detail}</div>
-                      </td>
-                      <td className="mono muted">@{it.char_start}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <Card
+              title={`质量告警（${report.issues.length}）`}
+              headerExtraContent={
+                <Typography.Text type="tertiary" size="small">
+                  按章节 / 类型排序，前 200 条
+                </Typography.Text>
+              }
+              style={{ marginTop: 16 }}
+              bodyStyle={{ padding: 0 }}
+            >
+              <Table
+                columns={issueColumns}
+                dataSource={report.issues}
+                rowKey={(it: any, i?: number) => `${it.code}-${it.chapter_no}-${i}`}
+                size="small"
+                pagination={{ pageSize: 8, showSizeChanger: false }}
+              />
+            </Card>
           )}
 
           {report.sample_chunks.length > 0 && (
-            <div className="card section-gap">
-              <div className="card-title">人工抽检（每 20 章抽 1 块）</div>
-              <div className="grid cols-2">
+            <Card title="人工抽检（每 20 章抽 1 块）" style={{ marginTop: 16 }}>
+              <Row gutter={[16, 16]}>
                 {report.sample_chunks.map((c) => (
-                  <div key={c.id}>
-                    <div className="row between" style={{ marginBottom: 5 }}>
-                      <span className="muted">第 {c.chapter_no} 章 · 第 {c.seq} 块</span>
-                      <span className="tag">{c.token_est} tok</span>
+                  <Col xs={24} xl={12} key={c.id}>
+                    <div className="row-between" style={{ marginBottom: 6 }}>
+                      <Typography.Text type="tertiary" size="small">
+                        第 {c.chapter_no} 章 · 第 {c.seq} 块
+                      </Typography.Text>
+                      <Tag color="grey" type="light" size="small">
+                        {c.token_est} tok
+                      </Tag>
                     </div>
                     <div className="chunk-box">{c.content.slice(0, 500)}</div>
-                  </div>
+                  </Col>
                 ))}
-              </div>
-            </div>
+              </Row>
+            </Card>
           )}
 
-          <div className="card pad-0 section-gap">
-            <div className="card-title" style={{ padding: '16px 20px 0' }}>
-              切片浏览（{total}）
+          <Card
+            title={`切片浏览（${total}）`}
+            headerExtraContent={
               <div className="row">
-                <select className="input" style={{ width: 130, padding: '5px 8px' }} value={level ?? ''} onChange={(e) => { setLevel(e.target.value === '' ? undefined : Number(e.target.value)); setPage(1) }}>
-                  <option value="">全部层级</option>
-                  <option value={0}>父块</option>
-                  <option value={1}>子块</option>
-                </select>
-                <input className="input" style={{ width: 100, padding: '5px 8px' }} placeholder="章节号" value={chapter} onChange={(e) => { setChapter(e.target.value); setPage(1) }} />
+                <Select
+                  value={level === undefined ? 'all' : String(level)}
+                  onChange={(v) => {
+                    setLevel(v === 'all' ? undefined : Number(v))
+                    setPage(1)
+                  }}
+                  style={{ width: 110 }}
+                  size="small"
+                >
+                  <Select.Option value="all">全部层级</Select.Option>
+                  <Select.Option value="0">父块</Select.Option>
+                  <Select.Option value="1">子块</Select.Option>
+                </Select>
+                <Input
+                  style={{ width: 100 }}
+                  size="small"
+                  placeholder="章节号"
+                  value={chapter}
+                  onChange={(v) => {
+                    setChapter(v)
+                    setPage(1)
+                  }}
+                />
               </div>
-            </div>
-            <table style={{ marginTop: 10 }}>
-              <thead>
-                <tr><th style={{ width: 60 }}>章</th><th style={{ width: 50 }}>序</th><th style={{ width: 64 }}>层级</th><th>内容</th><th style={{ width: 80 }}>token</th></tr>
-              </thead>
-              <tbody>
-                {loading && <tr><td colSpan={5}><div className="empty">加载中…</div></td></tr>}
-                {!loading && chunks.length === 0 && <tr><td colSpan={5}><div className="empty">暂无切片</div></td></tr>}
-                {chunks.map((c) => (
-                  <tr key={c.id} className="clickable" onClick={() => setOpen(c)}>
-                    <td className="mono">{c.chapter_no}</td>
-                    <td className="mono">{c.seq}</td>
-                    <td><span className={`badge ${c.level === 0 ? 'blue' : 'gray'}`}>{c.level === 0 ? '父' : '子'}</span></td>
-                    <td className="ellipsis" style={{ maxWidth: 520 }}>{c.content.slice(0, 90)}</td>
-                    <td className="mono">{c.token_est}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="row between" style={{ padding: '12px 20px' }}>
-              <span className="muted">第 {page} 页 / 共 {Math.max(1, Math.ceil(total / 10))} 页</span>
-              <div className="row">
-                <button className="btn sm" disabled={page <= 1} onClick={() => setPage(page - 1)}>上一页</button>
-                <button className="btn sm" disabled={page >= Math.ceil(total / 10)} onClick={() => setPage(page + 1)}>下一页</button>
-              </div>
-            </div>
-          </div>
+            }
+            style={{ marginTop: 16 }}
+            bodyStyle={{ padding: 0 }}
+          >
+            <Table
+              columns={chunkColumns}
+              dataSource={chunks}
+              loading={loading}
+              rowKey="id"
+              size="small"
+              pagination={{
+                currentPage: page,
+                pageSize: 10,
+                total,
+                showSizeChanger: false,
+                onPageChange: (p) => setPage(p),
+              }}
+              empty={<Empty title="暂无切片" description="这本书还没有切块数据" />}
+              onRow={(c) => ({ onClick: () => c && setOpen(c), style: { cursor: 'pointer' } })}
+            />
+          </Card>
         </>
       )}
 
-      {open && (
-        <div
-          onClick={() => setOpen(null)}
-          style={{ position: 'fixed', inset: 0, background: 'rgba(16,24,40,0.34)', display: 'grid', placeItems: 'center', zIndex: 50, padding: 30 }}
-        >
-          <div className="card" style={{ width: 'min(780px, 100%)', maxHeight: '82vh', overflow: 'auto' }} onClick={(e) => e.stopPropagation()}>
-            <div className="row between" style={{ marginBottom: 12 }}>
-              <div>
-                <b>第 {open.chapter_no} 章 · 第 {open.seq} 块</b>
-                <div className="muted mono">
-                  {open.id} · 字符 {open.char_start}-{open.char_end} · {open.token_est} tok
-                </div>
-              </div>
-              <button className="btn sm" onClick={() => setOpen(null)}>关闭</button>
+      <SideSheet
+        visible={!!open}
+        onCancel={() => setOpen(null)}
+        title={open ? `第 ${open.chapter_no} 章 · 第 ${open.seq} 块` : ''}
+        width={680}
+        bodyStyle={{ padding: '4px 20px 24px' }}
+      >
+        {open && (
+          <>
+            <Typography.Paragraph type="tertiary" size="small" className="mono">
+              {open.id} · 字符 {open.char_start}-{open.char_end} · {open.token_est} tok
+            </Typography.Paragraph>
+            <div className="chunk-box" style={{ maxHeight: '62vh' }}>
+              {open.content}
             </div>
-            <div className="chunk-box" style={{ maxHeight: '60vh' }}>{open.content}</div>
             {open.parent_id && (
-              <p className="muted mono" style={{ marginBottom: 0 }}>parent: {open.parent_id}</p>
+              <Typography.Paragraph type="tertiary" size="small" className="mono" style={{ marginTop: 12 }}>
+                parent: {open.parent_id}
+              </Typography.Paragraph>
             )}
-          </div>
-        </div>
-      )}
+          </>
+        )}
+      </SideSheet>
     </>
   )
 }

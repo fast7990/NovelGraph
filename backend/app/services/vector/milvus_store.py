@@ -59,6 +59,10 @@ class MilvusVectorStore:
             return self.collection
         return f"{self.collection}_d{dim}"
 
+    @staticmethod
+    def _model_signature(dim: int) -> str:
+        return f"embedding={settings.embedding_model}|dim={dim}"
+
     # ---------- schema ----------
     def _ensure_sync(self, dim: int) -> dict:
         from pymilvus import DataType
@@ -78,6 +82,16 @@ class MilvusVectorStore:
                             f"collection {name} 向量维度为 {has_dim}，当前 Embedding 输出 {dim}。"
                             f"请修改 MILVUS_COLLECTION 或清空该集合后重建。"
                         )
+            # 同维度换模型（bge-large → 另一个 1024 维模型）时维度校验拦不住，
+            # 库里的旧向量和新向量语义空间不同，混在一起检索会出诡异结果。
+            # 建集合时把模型签名写进 description，这里比对。
+            stored = (desc.get("description") or "").strip()
+            current = self._model_signature(dim)
+            if stored and stored != current:
+                raise RuntimeError(
+                    f"collection {name} 是用 {stored} 建的，当前配置是 {current}。"
+                    f"同一 collection 不能混用不同模型的向量，请换新的 MILVUS_COLLECTION。"
+                )
             try:
                 client.load_collection(name)
             except Exception:  # noqa: BLE001  已加载会抛错，忽略
@@ -104,9 +118,14 @@ class MilvusVectorStore:
             metric_type=settings.milvus_metric,
             params={},
         )
-        client.create_collection(name, schema=schema, index_params=index_params)
+        client.create_collection(
+            name,
+            schema=schema,
+            index_params=index_params,
+            description=self._model_signature(dim),
+        )
         client.load_collection(name)
-        logger.info("created milvus collection %s dim=%s", name, dim)
+        logger.info("created milvus collection %s dim=%s model=%s", name, dim, settings.embedding_model)
         return {"collection": name, "created": True, "dim": dim}
 
     async def ensure_ready(self, dim: int) -> dict:
@@ -135,6 +154,37 @@ class MilvusVectorStore:
         await asyncio.to_thread(
             lambda: client.delete(collection_name=name, filter=f'novel_id == "{novel_id}"')
         )
+
+    async def existing_ids(self, novel_id: str) -> set[str]:
+        """已入库的 chunk id 集合，用于断点续跑。
+
+        大书向量化动辄一两小时，进程一重启就得从头再算一遍，成本不可接受。
+        用 query_iterator 而不是 offset 分页：Milvus 的 offset 有上限，
+        超过 16384 直接报错，而一本 580 万字的书轻松过两万条。
+        """
+        client = await self._client_or_connect()
+        name = self.collection_name()
+
+        def _do() -> set[str]:
+            ids: set[str] = set()
+            it = client.query_iterator(
+                collection_name=name,
+                batch_size=2000,
+                filter=f'novel_id == "{novel_id}"',
+                output_fields=["id"],
+                consistency_level=settings.milvus_consistency,
+            )
+            try:
+                while True:
+                    batch = it.next()
+                    if not batch:
+                        break
+                    ids.update(str(r["id"]) for r in batch)
+            finally:
+                it.close()
+            return ids
+
+        return await asyncio.to_thread(_do)
 
     # ---------- 查询 ----------
     async def search(self, novel_id: str, vector: list[float], top_k: int, level: int = 1) -> list[VectorHit]:

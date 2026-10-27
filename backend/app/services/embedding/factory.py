@@ -6,6 +6,7 @@ import logging
 
 from app.config import settings
 from app.services.embedding.base import Embedder
+from app.services.embedding.errors import FatalModelError
 from app.services.embedding.hash_embedder import HashEmbedder
 from app.services.embedding.onnx_embedder import OnnxEmbedder
 from app.services.embedding.tei_embedder import TEIEmbedder
@@ -31,6 +32,9 @@ def get_embedder() -> Embedder:
             emb._load()
             emb._ready = True
             _instance = emb
+        except FatalModelError:
+            # 维度/配置不匹配属于人为错误，必须让启动失败。降级只会掩盖问题。
+            raise
         except Exception as exc:  # noqa: BLE001
             logger.warning("本地 ONNX 模型不可用，降级哈希向量：%s", exc)
             _instance = HashEmbedder()

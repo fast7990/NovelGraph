@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.1</div>
+  <div class="eyebrow">Technical Architecture · v1.3</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量库（Milvus 3.0）+ 知识图谱（Neo4j）→ 可视化中台 + 大模型增强问答。
@@ -227,7 +227,7 @@
     <span class="chip"><b>Milvus</b> 3.0.x · 阿里杭州托管</span>
     <span class="chip"><b>Neo4j</b> 5.x</span>
     <span class="chip"><b>大模型</b> 360 网关 · z-ai/glm-5</span>
-    <span class="chip"><b>Embedding</b> 本地 · bge-small-zh / bge-m3</span>
+    <span class="chip"><b>Embedding</b> 本地 int8 · bge-large-zh · 1024 维 / 8 线程</span>
     <span class="chip"><b>后端</b> FastAPI + Celery · uv</span>
     <span class="chip"><b>前端</b> React + G6 + ECharts · pnpm</span>
   </div>
@@ -384,7 +384,7 @@
         <li data-n="2"><b>解析</b>编码探测（GB18030 兜底）→ 目录剔除 → 章节正则 + 长度兜底 → 清洗</li>
         <li data-n="3"><b>分层切块</b>parent 1400 tokens / child 400 tokens（overlap 60），对话归属识别</li>
         <li data-n="4"><b>章节摘要</b>v4-flash 并发 8，产出 150 字样章摘要（同时入向量库 level=3）</li>
-        <li data-n="5"><b>双通道向量化</b>本地 bge-small（CPU）出稠密向量，稀疏走 Milvus 服务端 BM25；有 GPU 换 bge-m3 一次出双向量</li>
+        <li data-n="5"><b>双通道向量化</b>本地 bge-large-zh（int8 · 1024 维 · 8 线程）出稠密向量，稀疏走 Milvus 服务端 BM25；有 GPU 换 bge-m3 一次出双向量</li>
         <li data-n="6"><b>图谱抽取</b>规则候选 → v4-pro JSON 抽取 → 别名对齐 → 置信度闸门</li>
         <li data-n="7"><b>入库</b>Milvus 批 500 upsert；Neo4j 单事务 1000 条 UNWIND MERGE</li>
         <li data-n="8"><b>索引就绪</b>create_index + load；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
@@ -529,7 +529,7 @@
         <ul>
           <li>上传 / 去重 / 本地存储</li>
           <li>解析 + 分章 + 三层切块</li>
-          <li>本地 bge-small 向量 + Milvus 写入</li>
+          <li>本地 bge-large 向量（1024 维）+ Milvus 写入</li>
           <li>切片完成度复核页</li>
           <li>纯向量 RAG + SSE 流式</li>
           <li>最小管理台（4 页）</li>
@@ -590,7 +590,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.1</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.3</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

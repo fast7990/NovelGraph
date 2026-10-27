@@ -23,6 +23,7 @@ from app.schemas import (
 )
 from app.services.storage import get_storage
 from app.workers import runner
+from app.workers.cancel import cancel
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["novels"])
@@ -94,6 +95,8 @@ async def delete_novel(novel_id: str, db: AsyncSession = Depends(get_session)) -
     novel = await db.get(Novel, novel_id)
     if not novel:
         raise HTTPException(404, "小说不存在")
+    # 先发取消信号：worker 可能正在给这本书跑向量化，不喊停它会白烧一两个小时 CPU
+    cancel(novel_id)
     await db.execute(delete(Chunk).where(Chunk.novel_id == novel_id))
     await db.execute(delete(ChunkReport).where(ChunkReport.novel_id == novel_id))
     await db.execute(delete(Chapter).where(Chapter.novel_id == novel_id))
@@ -243,7 +246,12 @@ async def chunk_report(novel_id: str, db: AsyncSession = Depends(get_session)) -
 
 
 @router.post("/novels/{novel_id}/chunks/rebuild")
-async def rebuild(novel_id: str, db: AsyncSession = Depends(get_session)) -> dict:
+async def rebuild(
+    novel_id: str,
+    mode: str = Query("full", pattern="^(full|vectors)$", description="full=重新解析切块+向量化；vectors=只重算向量（复用已有切片，默认断点续跑）"),
+    force: bool = Query(False, description="仅 mode=vectors 生效：忽略已入库向量，清空重写"),
+    db: AsyncSession = Depends(get_session),
+) -> dict:
     novel = await db.get(Novel, novel_id)
     if not novel:
         raise HTTPException(404, "小说不存在")
@@ -252,8 +260,14 @@ async def rebuild(novel_id: str, db: AsyncSession = Depends(get_session)) -> dic
     novel.status = "PROCESSING"
     await db.commit()
     await db.refresh(job)
-    await runner.submit(job.id, "ingest")
-    return {"job_id": job.id, "novel_id": novel_id, "message": "已重新入队（全量重跑）"}
+    kind = "ingest" if mode == "full" else ("rebuild_force" if force else "rebuild")
+    await runner.submit(job.id, kind)
+    note = {
+        "ingest": "已重新入队（全量重跑：解析 + 切块 + 向量化）",
+        "rebuild": "已重新入队（只重算向量，跳过已入库的块）",
+        "rebuild_force": "已重新入队（清空已有向量后全量重算）",
+    }[kind]
+    return {"job_id": job.id, "novel_id": novel_id, "mode": mode, "force": force, "message": note}
 
 
 @router.get("/novels/{novel_id}/excerpt", response_class=PlainTextResponse)

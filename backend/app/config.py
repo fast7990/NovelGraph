@@ -6,7 +6,7 @@ import os
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     milvus_uri: str = ""
     milvus_token: str = ""
     milvus_db_name: str = "default"
-    milvus_collection: str = "novel_chunks_v1"
-    milvus_dim: int = 512
+    milvus_collection: str = "novel_chunks_d1024"
+    milvus_dim: int = 1024
     milvus_metric: str = "COSINE"
     milvus_index_type: str = "AUTOINDEX"
     milvus_timeout: int = 30
@@ -46,10 +46,14 @@ class Settings(BaseSettings):
 
     # ---- Embedding ----
     embedding_provider: str = "auto"
-    embedding_model: str = "BAAI/bge-small-zh-v1.5"
-    embedding_dim: int = 512
+    embedding_model: str = "BAAI/bge-large-zh-v1.5"
+    # ModelScope 上要拉哪个仓库（BAAI 官方仓库只放了 pytorch 权重，ONNX 用 Xenova 导出）
+    embedding_ms_repo: str = "Xenova/bge-large-zh-v1.5"
+    # 仓库内的 ONNX 相对路径；int8 量化版体积 1/4、CPU 快 2-3 倍
+    embedding_onnx_file: str = "onnx/model_quantized.onnx"
+    embedding_dim: int = 1024
     embedding_batch: int = 16
-    embedding_threads: int = 4
+    embedding_threads: int = 8
     embedding_max_tokens: int = 512
     hf_endpoint: str = "https://hf-mirror.com"
     embedding_cache_dir: str = "./data/models"
@@ -75,6 +79,20 @@ class Settings(BaseSettings):
     @classmethod
     def _strip(cls, v: object) -> object:
         return v.strip() if isinstance(v, str) else v
+
+    @model_validator(mode="after")
+    def _dims_must_match(self) -> Settings:
+        """Milvus 的定长向量维度必须等于 Embedding 输出维度。
+
+        这两项分散在两个区块，很容易只改一个（换模型忘了改 MILVUS_DIM），
+        结果 insert 阶段才炸、而且报错信息完全指不到根因。这里提前拦。
+        """
+        if self.milvus_dim != self.embedding_dim:
+            raise ValueError(
+                f"MILVUS_DIM={self.milvus_dim} 与 EMBEDDING_DIM={self.embedding_dim} 不一致。"
+                "两项必须相同；换模型时同时改，并换用新的 MILVUS_COLLECTION（维度不可原地修改）。"
+            )
+        return self
 
     # ---------- 派生属性 ----------
     @property

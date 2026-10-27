@@ -82,6 +82,10 @@ class NumpyVectorStore:
                 p.unlink()
         self._cache.pop(novel_id, None)
 
+    async def existing_ids(self, novel_id: str) -> set[str]:
+        _, meta = self._load(novel_id)
+        return {str(m["id"]) for m in meta}
+
     async def search(self, novel_id: str, vector: list[float], top_k: int, level: int = 1) -> list[VectorHit]:
         def _do() -> list[VectorHit]:
             vecs, meta = self._load(novel_id)
