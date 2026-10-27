@@ -1,0 +1,975 @@
+openapi: 3.0.3
+info:
+  title: 长篇小说 RAG + 知识图谱 双引擎 API
+  version: 1.0.0
+  description: |
+    统一管理台与问答服务的后端接口定义。
+    - 写入链路：上传 → 解析 → 切块 → 向量化 → 图谱构建（异步任务，SSE 报进度）
+    - 查询链路：混合检索 → rerank → 图谱增强 → 大模型（z-ai/glm-5）流式生成
+  contact:
+    name: 架构组
+servers:
+  - url: http://localhost:8000/api/v1
+    description: 本地开发
+  - url: https://{host}/api/v1
+    description: 生产
+    variables:
+      host:
+        default: novel.example.com
+
+tags:
+  - name: novels
+    description: 书籍与上传
+  - name: jobs
+    description: 任务与进度
+  - name: vectors
+    description: 向量库管理与可视化
+  - name: graph
+    description: 知识图谱管理与可视化
+  - name: chat
+    description: RAG 问答
+  - name: system
+    description: 健康与指标
+
+security:
+  - bearerAuth: []
+
+paths:
+  /novels:
+    get:
+      tags: [novels]
+      summary: 书籍列表
+      parameters:
+        - { name: page, in: query, schema: { type: integer, default: 1, minimum: 1 } }
+        - { name: size, in: query, schema: { type: integer, default: 20, maximum: 100 } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: status, in: query, schema: { type: string, enum: [pending, processing, ready, failed, stale] } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Novel' } }
+                          total: { type: integer }
+                          page: { type: integer }
+                          size: { type: integer }
+    post:
+      tags: [novels]
+      summary: 上传小说并触发处理管道
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          schema: { type: string }
+          description: 相同 key 的重复提交返回同一 job_id
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                title: { type: string }
+                author: { type: string }
+                auto_start: { type: boolean, default: true }
+      responses:
+        '202':
+          description: 已接受，任务已入队
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          novel_id: { type: string, format: uuid }
+                          job_id: { type: string, format: uuid }
+                          duplicate: { type: boolean }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '413':
+          description: 文件超过 100MB
+
+  /novels/{novel_id}:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [novels]
+      summary: 书籍详情（含 manifest 与各阶段统计）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Novel' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [novels]
+      summary: 修改标题/作者
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string }
+                author: { type: string }
+      responses:
+        '200': { description: OK }
+    delete:
+      tags: [novels]
+      summary: 删除书籍及派生数据
+      parameters:
+        - { name: purge_vectors, in: query, schema: { type: boolean, default: true } }
+        - { name: purge_graph, in: query, schema: { type: boolean, default: true } }
+      responses:
+        '202':
+          description: 已提交异步清理
+
+  /novels/{novel_id}/reprocess:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [novels]
+      summary: 局部重跑指定阶段
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stages]
+              properties:
+                stages:
+                  type: array
+                  items: { type: string, enum: [parsing, chunking, embedding, graph] }
+      responses:
+        '202':
+          description: 返回新 job_id
+
+  /novels/{novel_id}/chapters:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [novels]
+      summary: 章节列表
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items: { $ref: '#/components/schemas/Chapter' }
+
+  /novels/{novel_id}/chunks:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [novels]
+      summary: 切片浏览与复核
+      description: 支持按章节、层级、关键字筛选，用于核对切块质量。
+      parameters:
+        - { name: chapter_no, in: query, schema: { type: integer } }
+        - { name: level, in: query, schema: { type: integer, enum: [1, 2, 3] } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: warn_only, in: query, schema: { type: boolean, default: false } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/ChunkItem' } }
+                          total: { type: integer }
+
+  /novels/{novel_id}/chunk-report:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [novels]
+      summary: 切片完成度档案（进度 / 统计 / 告警 / 直方图）
+      parameters:
+        - { name: job_id, in: query, schema: { type: string, format: uuid }, description: 不传则取最新一次任务 }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ChunkReport' }
+
+  /novels/{novel_id}/chunks/rebuild:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [novels]
+      summary: 按章重新切块（修正章节边界后使用）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [chapter_nos]
+              properties:
+                chapter_nos:
+                  type: array
+                  items: { type: integer }
+                reembed: { type: boolean, default: true }
+      responses:
+        '202': { description: 返回新 job_id }
+
+  /jobs:
+    get:
+      tags: [jobs]
+      summary: 任务列表
+      parameters:
+        - { name: novel_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Job' } }
+                          total: { type: integer }
+
+  /jobs/{job_id}:
+    parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [jobs]
+      summary: 任务详情（含各 stage 状态）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        allOf:
+                          - $ref: '#/components/schemas/Job'
+                          - type: object
+                            properties:
+                              steps: { type: array, items: { $ref: '#/components/schemas/JobStep' } }
+
+  /jobs/{job_id}/events:
+    parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [jobs]
+      summary: 任务进度 SSE 流
+      description: |
+        事件类型：`stage`（阶段切换）、`chunk_progress`（切片完成度，500ms 节流）、
+        `progress`（批次进度）、`done`（完成）、`error`。
+        客户端断开后服务端停止读取。
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: stage
+                  data: {"stage":"CHUNKING","status":"RUNNING"}
+
+                  event: chunk_progress
+                  data: {"stage":"CHUNKING","progress":62.4,"chapters_done":128,"chapters_total":201,"chunks":{"child":2480,"parent":812},"warnings":2,"eta_sec":42}
+
+                  event: progress
+                  data: {"stage":"EMBEDDING","done":480,"total":4000,"eta_sec":95}
+
+  /jobs/{job_id}/retry:
+    parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [jobs]
+      summary: 从失败阶段续跑
+      responses:
+        '202': { description: 已重新入队 }
+
+  /jobs/{job_id}/cancel:
+    parameters:
+      - { name: job_id, in: path, required: true, schema: { type: string, format: uuid } }
+    post:
+      tags: [jobs]
+      summary: 协作式取消
+      responses:
+        '202': { description: 取消标记已设置 }
+
+  /vectors/stats:
+    get:
+      tags: [vectors]
+      summary: Collection 统计与索引信息
+      parameters:
+        - { name: novel_id, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/VectorStats' }
+
+  /vectors/search:
+    post:
+      tags: [vectors]
+      summary: 检索调试台（三通道对比）
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [novel_id, query]
+              properties:
+                novel_id: { type: string, format: uuid }
+                query: { type: string }
+                mode: { type: string, enum: [dense, sparse, hybrid], default: hybrid }
+                top_k: { type: integer, default: 10, maximum: 100 }
+                level: { type: integer, default: 1 }
+                chapter_range:
+                  type: array
+                  items: { type: integer }
+                  minItems: 2
+                  maxItems: 2
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          took_ms: { type: integer }
+                          results:
+                            type: array
+                            items: { $ref: '#/components/schemas/RetrievedChunk' }
+
+  /vectors/points:
+    get:
+      tags: [vectors]
+      summary: 分页浏览向量条目
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: chapter_no, in: query, schema: { type: integer } }
+        - { name: level, in: query, schema: { type: integer } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          items: { type: array, items: { $ref: '#/components/schemas/Point' } }
+                          total: { type: integer }
+
+  /vectors/points/{chunk_id}:
+    parameters:
+      - { name: chunk_id, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [vectors]
+      summary: 单条详情（含邻居与向量摘要）
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          point: { $ref: '#/components/schemas/Point' }
+                          vector_preview: { type: array, items: { type: number } }
+                          neighbors: { type: array, items: { $ref: '#/components/schemas/RetrievedChunk' } }
+
+  /vectors/projection:
+    get:
+      tags: [vectors]
+      summary: 降维坐标（离线预计算，用于散点可视化）
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: method, in: query, schema: { type: string, enum: [umap, pca, tsne], default: umap } }
+        - { name: dim, in: query, schema: { type: integer, enum: [2, 3], default: 2 } }
+        - { name: level, in: query, schema: { type: integer, default: 1 } }
+        - { name: limit, in: query, schema: { type: integer, default: 8000 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          method: { type: string }
+                          computed_at: { type: string, format: date-time }
+                          points:
+                            type: array
+                            items: { $ref: '#/components/schemas/ProjectionPoint' }
+
+  /vectors/novels/{novel_id}:
+    parameters:
+      - { name: novel_id, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [vectors]
+      summary: 清空某书向量
+      responses:
+        '202': { description: 已提交 }
+
+  /graph/stats:
+    get:
+      tags: [graph]
+      summary: 图谱统计（按 label / 关系类型分组计数）
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          nodes: { type: object, additionalProperties: { type: integer } }
+                          edges: { type: object, additionalProperties: { type: integer } }
+                          total_nodes: { type: integer }
+                          total_edges: { type: integer }
+
+  /graph/subgraph:
+    get:
+      tags: [graph]
+      summary: 子图查询（可视化主数据源）
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: center, in: query, schema: { type: string }, description: 中心实体 uid，不传则取 importance 最高的 N 个 }
+        - { name: depth, in: query, schema: { type: integer, default: 2, maximum: 3 } }
+        - name: labels
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: false
+        - name: rel_types
+          in: query
+          schema: { type: array, items: { type: string } }
+          style: form
+          explode: false
+        - { name: min_strength, in: query, schema: { type: number, default: 0, maximum: 1 } }
+        - { name: chapter_max, in: query, schema: { type: integer }, description: 只看某章之前的图（剧透控制） }
+        - { name: limit, in: query, schema: { type: integer, default: 200, maximum: 1000 } }
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/Subgraph' }
+
+  /graph/entities:
+    get:
+      tags: [graph]
+      summary: 实体列表
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: label, in: query, schema: { type: string } }
+        - { name: keyword, in: query, schema: { type: string } }
+        - { name: pending_only, in: query, schema: { type: boolean, default: false }, description: 仅看低置信待审 }
+        - { name: page, in: query, schema: { type: integer, default: 1 } }
+        - { name: size, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        '200':
+          description: OK
+
+  /graph/entities/{uid}:
+    parameters:
+      - { name: uid, in: path, required: true, schema: { type: string } }
+    get:
+      tags: [graph]
+      summary: 实体详情 + 一跳邻居 + 相关章节
+      responses:
+        '200':
+          description: OK
+    put:
+      tags: [graph]
+      summary: 人工修正实体属性/关系
+      responses:
+        '200': { description: OK }
+
+  /graph/entities/{uid}/merge:
+    parameters:
+      - { name: uid, in: path, required: true, schema: { type: string } }
+    post:
+      tags: [graph]
+      summary: 合并别名实体
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [target_uid]
+              properties:
+                target_uid: { type: string }
+      responses:
+        '200':
+          description: 返回合并后的实体与迁移的边数
+
+  /graph/timeline:
+    get:
+      tags: [graph]
+      summary: 章节-事件时间线
+      parameters:
+        - { name: novel_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, default: 300 } }
+      responses:
+        '200':
+          description: OK
+
+  /chat/sessions:
+    post:
+      tags: [chat]
+      summary: 新建会话
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [novel_id]
+              properties:
+                novel_id: { type: string, format: uuid }
+                title: { type: string }
+      responses:
+        '201':
+          description: Created
+    get:
+      tags: [chat]
+      summary: 会话列表
+      responses:
+        '200': { description: OK }
+
+  /chat/sessions/{session_id}/messages:
+    parameters:
+      - { name: session_id, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [chat]
+      summary: 历史消息（含引用）
+      parameters:
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+      responses:
+        '200': { description: OK }
+
+  /chat/completions:
+    post:
+      tags: [chat]
+      summary: RAG 流式问答
+      description: |
+        SSE 事件序列：`retrieval`（检索摘要）→ `delta`（token，可多次）→ `citations` → `done`。
+        客户端断开时服务端立即释放上游 LLM 连接。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [session_id, novel_id, question]
+              properties:
+                session_id: { type: string, format: uuid }
+                novel_id: { type: string, format: uuid }
+                question: { type: string, maxLength: 500 }
+                top_k: { type: integer, default: 8, maximum: 20 }
+                use_graph: { type: boolean, default: true }
+                chapter_max: { type: integer, description: 剧透控制：只用该章之前的资料 }
+                stream: { type: boolean, default: true }
+                debug: { type: boolean, default: false }
+      responses:
+        '200':
+          description: text/event-stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                example: |
+                  event: retrieval
+                  data: {"rewritten":"林三的师父是谁","chunks":8,"graph_triples":12,"took_ms":210}
+
+                  event: delta
+                  data: {"text":"林三的师父是"}
+
+                  event: citations
+                  data: [{"chunk_id":"n1:12:3","chapter_no":12,"chapter_title":"第十二章 拜师","score":0.83}]
+
+                  event: done
+                  data: {"message_id":9012,"token_in":3120,"token_out":186,"latency_ms":4200}
+        '429':
+          description: 排队超限
+
+  /files/{key}:
+    get:
+      tags: [novels]
+      summary: 原文/解析产物下载（302 到预签名 URL 或直接流式返回）
+      parameters:
+        - { name: key, in: path, required: true, schema: { type: string } }
+      responses:
+        '302': { description: 重定向到对象存储预签名地址 }
+        '200':
+          description: 本地存储时直接返回字节流
+
+  /health:
+    get:
+      tags: [system]
+      summary: 存活探针
+      security: []
+      responses:
+        '200': { description: OK }
+  /health/deps:
+    get:
+      tags: [system]
+      summary: 依赖健康（Milvus / Neo4j / PG / Redis / 本地 Embedding / 360 网关）
+      security: []
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiOk'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status: { type: string, enum: [ok, degraded, down] }
+                          components:
+                            type: object
+                            additionalProperties:
+                              type: object
+                              properties:
+                                status: { type: string, enum: [ok, degraded, down] }
+                                latency_ms: { type: integer }
+                                detail: { type: string }
+  /metrics:
+    get:
+      tags: [system]
+      summary: Prometheus 指标
+      security: []
+      responses:
+        '200':
+          description: text/plain
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: 参数错误
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApiError' }
+
+  schemas:
+    ApiOk:
+      type: object
+      properties:
+        code: { type: integer, example: 0 }
+        data: { type: object }
+        trace_id: { type: string }
+    ApiError:
+      type: object
+      properties:
+        code: { type: integer, example: 40012 }
+        message: { type: string }
+        trace_id: { type: string }
+        detail: { type: object }
+
+    Novel:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string }
+        author: { type: string }
+        file_key: { type: string, example: raw/8f2c.../斗破.txt }
+        file_size: { type: integer }
+        char_count: { type: integer }
+        chapter_count: { type: integer }
+        status: { type: string, enum: [pending, processing, ready, failed, stale] }
+        manifest:
+          type: object
+          properties:
+            parse_version: { type: string }
+            chunk_version: { type: string }
+            embedding_model: { type: string, example: BAAI/bge-m3 }
+            graph_schema_version: { type: string }
+        stats:
+          type: object
+          properties:
+            chunks: { type: integer }
+            entities: { type: integer }
+            edges: { type: integer }
+        created_at: { type: string, format: date-time }
+
+    Chapter:
+      type: object
+      properties:
+        chapter_no: { type: integer }
+        title: { type: string }
+        char_start: { type: integer }
+        char_end: { type: integer }
+        summary: { type: string }
+        entity_count: { type: integer }
+
+    ChunkItem:
+      type: object
+      properties:
+        chunk_id: { type: string }
+        chapter_no: { type: integer }
+        level: { type: integer, enum: [1, 2, 3] }
+        seq: { type: integer }
+        parent_id: { type: string, nullable: true }
+        content: { type: string }
+        token_count: { type: integer }
+        speakers: { type: array, items: { type: string } }
+        warns:
+          type: array
+          items: { type: string }
+          description: 该块命中的告警 code 列表
+
+    ChunkWarning:
+      type: object
+      properties:
+        level: { type: string, enum: [info, warn, error] }
+        code:
+          type: string
+          enum: [CHAPTER_EMPTY, CHAPTER_TOO_LONG, CHUNK_TOO_LONG, CHUNK_TOO_SHORT,
+                 PARENT_MISSING, OVERLAP_ANOMALY, DUP_CHUNK, ENCODING_SUSPECT]
+        chapter_no: { type: integer, nullable: true }
+        chunk_id: { type: string, nullable: true }
+        detail: { type: string }
+
+    ChunkReport:
+      type: object
+      properties:
+        job_id: { type: string, format: uuid }
+        novel_id: { type: string, format: uuid }
+        stage: { type: string, enum: [PARSING, CHUNKING, EMBEDDING] }
+        progress: { type: number, description: 已切字符 / 总字符 × 100 }
+        chars_done: { type: integer }
+        chars_total: { type: integer }
+        chapters_done: { type: integer }
+        chapters_total: { type: integer }
+        chunks:
+          type: object
+          properties:
+            child: { type: integer }
+            parent: { type: integer }
+            summary: { type: integer }
+        tokens:
+          type: object
+          properties:
+            avg: { type: integer }
+            p50: { type: integer }
+            p95: { type: integer }
+            max: { type: integer }
+        histogram:
+          type: array
+          description: "[[区间下界, 块数], ...]"
+          items:
+            type: array
+            items: { type: integer }
+        warnings:
+          type: array
+          items: { $ref: '#/components/schemas/ChunkWarning' }
+        eta_sec: { type: integer, nullable: true }
+        updated_at: { type: string, format: date-time }
+
+    Job:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        novel_id: { type: string, format: uuid }
+        type: { type: string, enum: [ingest, graph, reembed, rebuild] }
+        status:
+          type: string
+          enum: [PENDING, RUNNING, PARTIAL, COMPLETED, FAILED, CANCELED]
+        stage:
+          type: string
+          enum: [PARSING, CHUNKING, EMBEDDING, VECTOR_INDEXED, GRAPH_EXTRACTING, GRAPH_WRITING]
+        progress: { type: integer, minimum: 0, maximum: 100 }
+        stats: { type: object }
+        error: { type: string, nullable: true }
+        started_at: { type: string, format: date-time, nullable: true }
+        finished_at: { type: string, format: date-time, nullable: true }
+
+    JobStep:
+      type: object
+      properties:
+        stage: { type: string }
+        status: { type: string }
+        attempts: { type: integer }
+        cursor: { type: object }
+        updated_at: { type: string, format: date-time }
+
+    VectorStats:
+      type: object
+      properties:
+        collection: { type: string }
+        num_entities: { type: integer }
+        index_types:
+          type: object
+          properties:
+            dense: { type: string, example: HNSW }
+            sparse: { type: string, example: SINDI }
+        partitions: { type: integer }
+        load_state: { type: string, enum: [Loaded, NotLoad] }
+        by_level:
+          type: object
+          additionalProperties: { type: integer }
+
+    RetrievedChunk:
+      type: object
+      properties:
+        chunk_id: { type: string }
+        chapter_no: { type: integer }
+        chapter_title: { type: string }
+        content: { type: string }
+        score: { type: number }
+        channel: { type: string, enum: [dense, sparse, hybrid, rerank] }
+        parent_id: { type: string, nullable: true }
+
+    Point:
+      type: object
+      properties:
+        chunk_id: { type: string }
+        novel_id: { type: string }
+        chapter_no: { type: integer }
+        level: { type: integer }
+        seq: { type: integer }
+        content: { type: string }
+        token_count: { type: integer }
+        speakers: { type: array, items: { type: string } }
+        entities: { type: array, items: { type: string } }
+
+    ProjectionPoint:
+      type: object
+      properties:
+        chunk_id: { type: string }
+        x: { type: number }
+        y: { type: number }
+        z: { type: number, nullable: true }
+        chapter_no: { type: integer }
+        cluster: { type: integer, nullable: true }
+
+    Subgraph:
+      type: object
+      properties:
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              label: { type: string }
+              name: { type: string }
+              props: { type: object }
+              degree: { type: integer }
+        edges:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              source: { type: string }
+              target: { type: string }
+              type: { type: string }
+              props: { type: object }
+        truncated: { type: boolean }

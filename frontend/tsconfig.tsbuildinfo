@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/api/client.ts","./src/pages/chat.tsx","./src/pages/chunkreview.tsx","./src/pages/overview.tsx","./src/pages/upload.tsx","./src/pages/vectorview.tsx"],"version":"5.9.3"}

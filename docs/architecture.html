@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>长篇小说 RAG + 知识图谱 双引擎 · 架构总览</title>
+<style>
+  :root{
+    --bg:#f6f7f9;
+    --panel:#ffffff;
+    --ink:#0f172a;
+    --ink-2:#475569;
+    --ink-3:#7c8798;
+    --line:#e4e8ee;
+    --line-2:#eef1f5;
+    --blue:#2563eb;
+    --blue-bg:#eef4ff;
+    --teal:#0d9488;
+    --teal-bg:#e9f8f5;
+    --amber:#b45309;
+    --amber-bg:#fdf5e6;
+    --red:#b42318;
+    --red-bg:#fdeeed;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{
+    margin:0;background:var(--bg);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;line-height:1.7;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 28px 80px}
+  code,.mono{font-family:var(--mono);font-size:.88em}
+
+  /* ---------- header ---------- */
+  header{padding:56px 0 34px;border-bottom:1px solid var(--line)}
+  .eyebrow{
+    display:inline-flex;align-items:center;gap:8px;font-size:12px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--ink-3);font-weight:600;margin-bottom:16px
+  }
+  .eyebrow::before{content:"";width:22px;height:2px;background:var(--blue);border-radius:2px}
+  h1{margin:0 0 14px;font-size:34px;line-height:1.28;letter-spacing:-.02em;font-weight:700}
+  h1 span{color:var(--blue)}
+  .sub{margin:0;color:var(--ink-2);font-size:15.5px;max-width:760px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+  .chip{
+    font-size:12.5px;padding:5px 11px;border-radius:999px;background:var(--panel);
+    border:1px solid var(--line);color:var(--ink-2);font-weight:500
+  }
+  .chip b{color:var(--ink);font-weight:600}
+
+  /* ---------- section ---------- */
+  section{padding-top:52px}
+  h2{
+    margin:0 0 6px;font-size:20px;letter-spacing:-.01em;font-weight:700;
+    display:flex;align-items:baseline;gap:12px
+  }
+  h2 i{
+    font-style:normal;font-family:var(--mono);font-size:12px;color:var(--blue);
+    background:var(--blue-bg);padding:3px 7px;border-radius:5px;font-weight:600
+  }
+  .lead{margin:0 0 22px;color:var(--ink-2);font-size:14.5px;max-width:840px}
+
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:14px;
+    padding:26px;box-shadow:0 1px 2px rgba(15,23,42,.03)
+  }
+  figure{margin:0}
+  figcaption{margin-top:14px;font-size:13px;color:var(--ink-3);text-align:center}
+  svg{display:block;width:100%;height:auto}
+
+  /* ---------- alerts ---------- */
+  .notes{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-top:26px}
+  .note{
+    background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--blue);
+    border-radius:10px;padding:15px 16px
+  }
+  .note.warn{border-left-color:var(--amber)}
+  .note.ok{border-left-color:var(--teal)}
+  .note h3{margin:0 0 6px;font-size:13.5px;font-weight:700}
+  .note p{margin:0;font-size:13px;color:var(--ink-2);line-height:1.65}
+  .note .k{
+    display:inline-block;font-family:var(--mono);font-size:11.5px;background:#f1f5f9;
+    padding:1px 5px;border-radius:4px;color:var(--ink);word-break:break-all
+  }
+
+  /* ---------- dual pipeline ---------- */
+  .flows{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+  .flow-head{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+  .flow-head h3{margin:0;font-size:15px;font-weight:700}
+  .badge{font-size:11px;font-weight:700;letter-spacing:.06em;padding:3px 8px;border-radius:5px}
+  .badge.write{background:var(--blue-bg);color:var(--blue)}
+  .badge.read{background:var(--teal-bg);color:var(--teal)}
+  .steps{list-style:none;margin:0;padding:0;position:relative}
+  .steps::before{
+    content:"";position:absolute;left:13px;top:8px;bottom:12px;width:1.5px;background:var(--line)
+  }
+  .steps li{position:relative;padding:0 0 15px 38px;font-size:13.5px;color:var(--ink-2)}
+  .steps li:last-child{padding-bottom:0}
+  .steps li b{display:block;color:var(--ink);font-weight:600;font-size:13.5px;margin-bottom:1px}
+  .steps li::before{
+    content:attr(data-n);position:absolute;left:5px;top:2px;width:17px;height:17px;border-radius:50%;
+    background:var(--panel);border:1.5px solid var(--line);color:var(--ink-3);
+    font-size:10px;font-weight:700;display:flex;align-items:center;justify-content:center;
+    font-family:var(--mono)
+  }
+  .flow.write .steps li::before{border-color:#bfd3fb;color:var(--blue)}
+  .flow.read .steps li::before{border-color:#a7ded4;color:var(--teal)}
+  .steps li code{background:#f1f5f9;padding:1px 4px;border-radius:3px;color:var(--ink)}
+
+  /* ---------- schema cards ---------- */
+  .schemas{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:16px}
+  .schema h3{
+    margin:0 0 4px;font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px
+  }
+  .schema .tag{font-size:11px;font-family:var(--mono);color:var(--ink-3);font-weight:500}
+  .schema ul{margin:12px 0 0;padding:0;list-style:none}
+  .schema li{
+    font-size:12.8px;color:var(--ink-2);padding:5px 0;border-bottom:1px dashed var(--line-2);
+    display:flex;justify-content:space-between;gap:10px
+  }
+  .schema li:last-child{border-bottom:0}
+  .schema li span:first-child{font-family:var(--mono);color:var(--ink);font-size:12px}
+  .schema li span:last-child{color:var(--ink-3);text-align:right}
+
+  /* ---------- kpi ---------- */
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+  .kpi{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 18px 16px}
+  .kpi .v{font-size:26px;font-weight:700;letter-spacing:-.02em;line-height:1.1}
+  .kpi .v em{font-style:normal;font-size:13px;font-weight:600;color:var(--ink-3);margin-left:2px}
+  .kpi .l{margin-top:6px;font-size:12.5px;color:var(--ink-2)}
+  .kpi .n{margin-top:3px;font-size:11.5px;color:var(--ink-3)}
+
+  /* ---------- roadmap ---------- */
+  .road{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+  .phase{background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .phase header{
+    padding:14px 18px;border-bottom:1px solid var(--line);display:flex;
+    justify-content:space-between;align-items:center;gap:8px
+  }
+  .phase header .p{font-size:13px;font-weight:700;letter-spacing:.04em}
+  .phase header .d{font-size:11.5px;color:var(--ink-3);font-family:var(--mono)}
+  .phase .body{padding:14px 18px 18px}
+  .phase .goal{margin:0 0 12px;font-size:12.5px;color:var(--ink-2);line-height:1.6}
+  .phase ul{margin:0;padding:0;list-style:none}
+  .phase li{font-size:12.6px;color:var(--ink-2);padding:4px 0 4px 18px;position:relative}
+  .phase li::before{
+    content:"";position:absolute;left:2px;top:11px;width:6px;height:6px;border-radius:2px;
+    background:#cbd5e1
+  }
+  .phase.p0 li::before{background:#bfd3fb}
+  .phase.p1 li::before{background:#a7ded4}
+  .phase.p2 li::before{background:#f0d9a8}
+  .phase .accept{
+    margin-top:14px;padding-top:12px;border-top:1px solid var(--line-2);
+    font-size:12.2px;color:var(--ink-3);line-height:1.6
+  }
+  .phase .accept b{color:var(--ink);font-weight:600}
+
+  /* ---------- table ---------- */
+  .tbl{width:100%;border-collapse:collapse;font-size:13px}
+  .tbl th{
+    text-align:left;font-weight:600;font-size:12px;letter-spacing:.04em;color:var(--ink-3);
+    padding:8px 10px;border-bottom:1px solid var(--line);text-transform:uppercase
+  }
+  .tbl td{padding:10px;border-bottom:1px solid var(--line-2);color:var(--ink-2);vertical-align:top}
+  .tbl tr:last-child td{border-bottom:0}
+  .tbl td:first-child{color:var(--ink);font-weight:500}
+  .dot{display:inline-block;width:6px;height:6px;border-radius:50%;margin-right:6px}
+  .dot.h{background:var(--red)} .dot.m{background:#d97706} .dot.l{background:#16a34a}
+
+  /* ---------- chunk progress mock ---------- */
+  .cpr-head{
+    padding:16px 22px;border-bottom:1px solid var(--line);display:flex;
+    justify-content:space-between;align-items:center;gap:16px;background:#fcfdff
+  }
+  .cpr-head .t{font-size:13.5px;font-weight:600}
+  .cpr-head .sid{font-family:var(--mono);font-size:11px;color:var(--ink-3);margin-left:8px;font-weight:400}
+  .cpr-head .pct{font-size:24px;font-weight:700;letter-spacing:-.02em;color:var(--blue)}
+  .cpr-body{padding:18px 22px 20px}
+  .cpr-row{display:grid;grid-template-columns:48px 1fr 150px;gap:12px;align-items:center;font-size:12.5px;margin-bottom:10px}
+  .cpr-row .lb{color:var(--ink-3)}
+  .cpr-row .vv{text-align:right;color:var(--ink-2);font-family:var(--mono);font-size:11px}
+  .bar{height:8px;background:#eef1f5;border-radius:999px;overflow:hidden}
+  .bar i{display:block;height:100%;background:var(--blue);border-radius:999px}
+  .bar.teal i{background:var(--teal)}
+  .bar.idle i{background:#dfe5ee}
+  .cpr-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:16px 0 4px}
+  .cpr-stat{background:#fbfcfe;border:1px solid var(--line-2);border-radius:8px;padding:9px 11px}
+  .cpr-stat .k{font-size:11px;color:var(--ink-3)}
+  .cpr-stat .v{font-size:15px;font-weight:600;font-family:var(--mono)}
+  .warnlist{margin-top:14px;border-top:1px solid var(--line-2);padding-top:6px}
+  .warnlist .hdr{font-size:11px;letter-spacing:.08em;color:var(--ink-3);font-weight:600;margin:8px 0 2px}
+  .wrow{display:flex;gap:9px;align-items:flex-start;font-size:12.5px;padding:6px 0;border-bottom:1px dashed var(--line-2)}
+  .wrow:last-child{border-bottom:0}
+  .wt{font-family:var(--mono);font-size:10px;padding:1px 5px;border-radius:4px;flex:none;margin-top:2px;font-weight:600}
+  .wt.w{background:#fdf5e6;color:#b45309}
+  .wt.e{background:#fdeeed;color:#b42318}
+  .wrow .go{margin-left:auto;color:var(--blue);font-size:11.5px;white-space:nowrap}
+  .preview{margin-top:12px;background:#fbfcfe;border:1px solid var(--line-2);border-radius:8px;padding:11px 13px}
+  .preview .pl{font-size:11px;color:var(--ink-3);margin-bottom:6px}
+  .preview .pt{font-size:12.5px;color:var(--ink-2);line-height:1.6}
+
+  footer{
+    margin-top:64px;padding-top:22px;border-top:1px solid var(--line);
+    font-size:12.5px;color:var(--ink-3);display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap
+  }
+  @media (max-width:900px){
+    .notes,.flows,.schemas,.road,.kpis{grid-template-columns:1fr}
+    h1{font-size:26px}
+    .wrap{padding:0 18px 60px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="eyebrow">Technical Architecture · v1.1</div>
+  <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
+  <p class="sub">
+    原始文本 → 向量库（Milvus 3.0）+ 知识图谱（Neo4j）→ 可视化中台 + 大模型增强问答。
+    写入异步可重跑，查询同步可降级，两个引擎共享同一套标识体系。
+  </p>
+  <div class="meta">
+    <span class="chip"><b>Milvus</b> 3.0.x · 阿里杭州托管</span>
+    <span class="chip"><b>Neo4j</b> 5.x</span>
+    <span class="chip"><b>大模型</b> 360 网关 · z-ai/glm-5</span>
+    <span class="chip"><b>Embedding</b> 本地 · bge-small-zh / bge-m3</span>
+    <span class="chip"><b>后端</b> FastAPI + Celery · uv</span>
+    <span class="chip"><b>前端</b> React + G6 + ECharts · pnpm</span>
+  </div>
+</header>
+
+<div class="notes">
+  <div class="note warn">
+    <h3>① 连接参数需要拆分</h3>
+    <p>你给的 <span class="k">a0fb1431…8704e</span> 是纯十六进制串，没有 scheme/host，形态是 Token。必须补 <span class="k">MILVUS_URI</span>（实例地址），Token 放 <span class="k">MILVUS_TOKEN</span>。配置层做格式兜底 + 启动自检，避免上线才发现连不上。</p>
+  </div>
+  <div class="note ok">
+    <h3>② 3.0 改变了分工</h3>
+    <p>服务端 BM25 + 新稀疏索引（体积约 2.6 版的 1/3）、SINDI 学习型稀疏、服务端 ORDER BY/聚合。混合检索可以少跑一个客户端编码器，统计面板可以下推引擎。</p>
+  </div>
+  <div class="note">
+    <h3>③ 大模型走 OpenAI 兼容网关</h3>
+    <p>360 网关 <span class="k">api.360.cn/v1</span> + <span class="k">z-ai/glm-5</span>，全部调用走 <span class="k">openai</span> SDK 覆盖 <span class="k">base_url</span>。换 DeepSeek 只改环境变量。不假设上游有 prompt 缓存，成本靠上下文预算控制。</p>
+  </div>
+  <div class="note">
+    <h3>④ 切片过程必须看得见</h3>
+    <p>按字符数算真实进度，附 token 分布、8 类异常检测、抽样预览。每条告警可跳转原文核查——切片是最容易错、也最难核实的一步。</p>
+  </div>
+</div>
+
+<section>
+  <h2><i>01</i> 总体架构</h2>
+  <p class="lead">四层结构：接入 → 应用 → 能力 → 存储。能力层左右分置"写入管道"与"查询链路"，二者只通过三份共享标识耦合，互不阻塞。</p>
+  <div class="panel">
+    <figure>
+      <svg viewBox="0 0 1080 640" role="img" aria-label="四层架构图">
+        <defs>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" fill="#94a3b8"/>
+          </marker>
+          <style>
+            .band{fill:#ffffff;stroke:#e4e8ee;stroke-width:1}
+            .bandlbl{font-size:11px;font-weight:700;fill:#94a3b8;letter-spacing:.12em}
+            .box{fill:#f8fafc;stroke:#dfe5ee;stroke-width:1;rx:7}
+            .boxt{font-size:12.5px;fill:#0f172a;font-weight:600}
+            .boxs{font-size:10.5px;fill:#7c8798}
+            .accent{fill:#eef4ff;stroke:#bfd3fb}
+            .accentt{font-size:12.5px;fill:#1d4ed8;font-weight:600}
+            .tealf{fill:#e9f8f5;stroke:#a7ded4}
+            .tealt{font-size:12.5px;fill:#0f766e;font-weight:600}
+            .stor{fill:#f8fafc;stroke:#dfe5ee}
+            .stort{font-size:12px;fill:#0f172a;font-weight:600}
+            .ch{font-size:10.5px;fill:#7c8798}
+          </style>
+        </defs>
+
+        <!-- 接入层 -->
+        <rect class="band" x="20" y="16" width="1040" height="86" rx="10"/>
+        <text class="bandlbl" x="40" y="40">接入层 · ACCESS</text>
+        <rect class="accent" x="40" y="52" width="230" height="36" rx="7"/>
+        <text class="accentt" x="56" y="75">管理台 SPA（React）</text>
+        <rect class="accent" x="284" y="52" width="200" height="36" rx="7"/>
+        <text class="accentt" x="300" y="75">可视化页（G6/ECharts）</text>
+        <rect class="accent" x="498" y="52" width="170" height="36" rx="7"/>
+        <text class="accentt" x="514" y="75">问答前端</text>
+        <rect class="box" x="682" y="52" width="170" height="36" rx="7"/>
+        <text class="boxt" x="698" y="75">Nginx</text>
+        <rect class="box" x="866" y="52" width="174" height="36" rx="7"/>
+        <text class="boxt" x="882" y="75">JWT / 限流</text>
+
+        <!-- 应用层 -->
+        <rect class="band" x="20" y="118" width="1040" height="122" rx="10"/>
+        <text class="bandlbl" x="40" y="142">应用层 · API (FastAPI)</text>
+        <rect class="box" x="40" y="154" width="152" height="34" rx="7"/><text class="boxt" x="56" y="176">上传管理 M1</text>
+        <rect class="box" x="204" y="154" width="152" height="34" rx="7"/><text class="boxt" x="220" y="176">任务编排</text>
+        <rect class="box" x="368" y="154" width="152" height="34" rx="7"/><text class="boxt" x="384" y="176">向量管理</text>
+        <rect class="box" x="532" y="154" width="152" height="34" rx="7"/><text class="boxt" x="548" y="176">图谱管理</text>
+        <rect class="box" x="696" y="154" width="152" height="34" rx="7"/><text class="boxt" x="712" y="176">问答编排 M7</text>
+        <rect class="box" x="860" y="154" width="180" height="34" rx="7"/><text class="boxt" x="876" y="176">SSE 流式通道</text>
+
+        <rect class="box" x="40" y="196" width="1000" height="32" rx="6" fill="#fcfdff"/>
+        <text class="boxs" x="56" y="217">横切：统一错误封装 · 分页 · trace_id · 幂等键 · Pydantic 校验 · 依赖注入（Protocol 替换实现）</text>
+
+        <!-- 能力层 -->
+        <rect class="band" x="20" y="252" width="1040" height="140" rx="10"/>
+        <text class="bandlbl" x="40" y="276">能力层 · CAPABILITY</text>
+
+        <rect class="tealf" x="40" y="288" width="238" height="88" rx="8"/>
+        <text class="tealt" x="56" y="311">写入管道（Celery Worker）</text>
+        <text class="boxs" x="56" y="332">worker-ingest：解析 → 切块 → 编码</text>
+        <text class="boxs" x="56" y="349">worker-graph：LLM 抽取 → 对齐</text>
+        <text class="boxs" x="56" y="366">检查点续跑 · 幂等 upsert</text>
+
+        <rect class="tealf" x="292" y="288" width="238" height="88" rx="8"/>
+        <text class="tealt" x="308" y="311">检索层 M6</text>
+        <text class="boxs" x="308" y="332">dense + sparse 并行召回</text>
+        <text class="boxs" x="308" y="349">RRF 融合 → bge-reranker</text>
+        <text class="boxs" x="308" y="366">small-to-big 回溯父块</text>
+
+        <rect class="tealf" x="544" y="288" width="238" height="88" rx="8"/>
+        <text class="tealt" x="560" y="311">生成层 M7</text>
+        <text class="boxs" x="560" y="332">360 网关客户端（OpenAI 协议）</text>
+        <text class="boxs" x="560" y="349">前缀缓存 · 上下文预算</text>
+        <text class="boxs" x="560" y="366">引用回填 · 断连释放上游</text>
+
+        <rect class="tealf" x="796" y="288" width="244" height="88" rx="8"/>
+        <text class="tealt" x="812" y="311">适配层 M8</text>
+        <text class="boxs" x="812" y="332">Storage：Local ⇄ S3</text>
+        <text class="boxs" x="812" y="349">Vector：MilvusClient 封装</text>
+        <text class="boxs" x="812" y="366">Graph / Embedding / LLM Provider</text>
+
+        <!-- 存储层 -->
+        <rect class="band" x="20" y="410" width="1040" height="112" rx="10"/>
+        <text class="bandlbl" x="40" y="434">存储层 · STORAGE</text>
+        <rect class="stor" x="40" y="446" width="246" height="60" rx="8"/>
+        <text class="stort" x="58" y="470">Milvus 3.0（向量）</text>
+        <text class="ch" x="58" y="489">chunk 双向量 · partition_key=novel_id</text>
+        <rect class="stor" x="300" y="446" width="246" height="60" rx="8"/>
+        <text class="stort" x="318" y="470">Neo4j（图谱）</text>
+        <text class="ch" x="318" y="489">7 类节点 · 10 类关系 · 唯一约束</text>
+        <rect class="stor" x="560" y="446" width="246" height="60" rx="8"/>
+        <text class="stort" x="578" y="470">PostgreSQL（元数据）</text>
+        <text class="ch" x="578" y="489">novels/chapters/chunks/jobs/messages</text>
+        <rect class="stor" x="820" y="446" width="220" height="60" rx="8"/>
+        <text class="stort" x="838" y="470">Redis + 本地文件 / S3</text>
+        <text class="ch" x="838" y="489">缓存 · 队列 · 原文可切换</text>
+
+        <!-- 外部服务 -->
+        <rect class="band" x="20" y="540" width="1040" height="84" rx="10" stroke-dasharray="4 3"/>
+        <text class="bandlbl" x="40" y="564">外部依赖 · EXTERNAL</text>
+        <rect class="box" x="40" y="576" width="300" height="34" rx="7"/>
+        <text class="boxt" x="56" y="598">360 网关 api.360.cn/v1 · z-ai/glm-5</text>
+        <rect class="box" x="356" y="576" width="300" height="34" rx="7"/>
+        <text class="boxt" x="372" y="598">本地 Embedding（CPU 可跑）</text>
+        <rect class="box" x="672" y="576" width="368" height="34" rx="7"/>
+        <text class="boxt" x="688" y="598">bge-reranker-v2-m3（CPU 可跑）</text>
+
+        <!-- 箭头 -->
+        <line x1="540" y1="102" x2="540" y2="116" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
+        <line x1="540" y1="240" x2="540" y2="250" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
+        <line x1="540" y1="392" x2="540" y2="408" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
+        <line x1="540" y1="522" x2="540" y2="538" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
+      </svg>
+      <figcaption>四层架构：写入与查询在能力层分置，共享 Milvus / Neo4j / PG 三份存储</figcaption>
+    </figure>
+  </div>
+</section>
+
+<section>
+  <h2><i>02</i> 双链路数据流</h2>
+  <p class="lead">左：上传后自动触发的构建管道，异步、可断点续跑、幂等。右：单次问答的检索增强链路，同步、低延迟、可逐级降级。</p>
+  <div class="flows">
+    <div class="panel flow write">
+      <div class="flow-head">
+        <span class="badge write">WRITE</span>
+        <h3>构建管道（100 万字 ≈ 30 min）</h3>
+      </div>
+      <ol class="steps">
+        <li data-n="1"><b>上传与去重</b>sha256 命中则直接返回已有 <code>novel_id</code>；文件落 <code>raw/{novel_id}/</code></li>
+        <li data-n="2"><b>解析</b>编码探测（GB18030 兜底）→ 目录剔除 → 章节正则 + 长度兜底 → 清洗</li>
+        <li data-n="3"><b>分层切块</b>parent 1400 tokens / child 400 tokens（overlap 60），对话归属识别</li>
+        <li data-n="4"><b>章节摘要</b>v4-flash 并发 8，产出 150 字样章摘要（同时入向量库 level=3）</li>
+        <li data-n="5"><b>双通道向量化</b>本地 bge-small（CPU）出稠密向量，稀疏走 Milvus 服务端 BM25；有 GPU 换 bge-m3 一次出双向量</li>
+        <li data-n="6"><b>图谱抽取</b>规则候选 → v4-pro JSON 抽取 → 别名对齐 → 置信度闸门</li>
+        <li data-n="7"><b>入库</b>Milvus 批 500 upsert；Neo4j 单事务 1000 条 UNWIND MERGE</li>
+        <li data-n="8"><b>索引就绪</b>create_index + load；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
+      </ol>
+    </div>
+    <div class="panel flow read">
+      <div class="flow-head">
+        <span class="badge read">READ</span>
+        <h3>问答链路（P95 首字 &lt; 2 s）</h3>
+      </div>
+      <ol class="steps">
+        <li data-n="1"><b>Query 改写</b>v4-flash 做指代消解 + 关键词/实体抽取 → <code>standalone_query</code></li>
+        <li data-n="2"><b>并行召回</b>Milvus hybrid（ef=64，filter <code>novel_id</code> + <code>level==1</code>，limit 50）</li>
+        <li data-n="3"><b>图谱并发</b>实体定位 → 2-hop 子图（≤60 边）→ 三元组文本化（≤40 条）</li>
+        <li data-n="4"><b>RRF 融合</b><code>Σ 1/(60+rank)</code>，对分值尺度不敏感，换模型不用调参</li>
+        <li data-n="5"><b>精排</b>bge-reranker-v2-m3，top50 → top8（约 80 ms）</li>
+        <li data-n="6"><b>回溯父块</b>child 命中 → 取 parent 原文，最多 4 个，控制在 8K token 内</li>
+        <li data-n="7"><b>Prompt 组装</b>固定前缀（字节稳定）+ 图谱事实 + 资料 + 历史，总预算 ≤ 8K</li>
+        <li data-n="8"><b>流式生成</b>SSE 推 delta → citations → done；断连立即释放上游连接</li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>03</i> 切片完成度查看</h2>
+  <p class="lead">
+    进度按「已切字符 / 总字符」计算——块数在流式切分中事前未知，用它算会出现越跑越退的假进度。
+    块数、token 分布、异常告警是副指标，用来判断"切得对不对"，30 秒内就能看完。
+  </p>
+  <div class="panel" style="padding:0;overflow:hidden">
+    <div class="cpr-head">
+      <div>
+        <div class="t">《长夜行》切片完成度 <span class="sid">job b31a9c · 第 2/3 阶段</span></div>
+        <div style="font-size:12px;color:var(--ink-3);margin-top:2px">当前阶段 CHUNKING · 预计剩余 42 s</div>
+      </div>
+      <div class="pct">62.4<span style="font-size:14px;color:var(--ink-3);font-weight:600">%</span></div>
+    </div>
+    <div class="cpr-body">
+      <div class="cpr-row">
+        <div class="lb">解析</div>
+        <div class="bar"><i style="width:100%"></i></div>
+        <div class="vv">201 / 201 章 ✓</div>
+      </div>
+      <div class="cpr-row">
+        <div class="lb">切块</div>
+        <div class="bar"><i style="width:62.4%"></i></div>
+        <div class="vv">128 章 · 3,292 块</div>
+      </div>
+      <div class="cpr-row">
+        <div class="lb">向量化</div>
+        <div class="bar idle"><i></i></div>
+        <div class="vv">等待中</div>
+      </div>
+
+      <div class="cpr-stats">
+        <div class="cpr-stat"><div class="k">平均 tokens</div><div class="v">386</div></div>
+        <div class="cpr-stat"><div class="k">P95</div><div class="v">452</div></div>
+        <div class="cpr-stat"><div class="k">最长块</div><div class="v">1,786</div></div>
+        <div class="cpr-stat"><div class="k">过短块</div><div class="v">12</div></div>
+      </div>
+
+      <div class="warnlist">
+        <div class="hdr">告警 2 条 · 每条可跳转原文核查</div>
+        <div class="wrow"><span class="wt w">WARN</span><span>第 57 章 有块 1,786 tokens，超过 parent 上限 1.3 倍</span><span class="go">跳转核查 →</span></div>
+        <div class="wrow"><span class="wt e">ERR</span><span>第 88 章 正文仅 32 字，疑似把"本章完"误判为章节标题</span><span class="go">跳转核查 →</span></div>
+      </div>
+
+      <div class="preview">
+        <div class="pl">抽样预览 · 每 20 章抽 1 块，共 10 条</div>
+        <div class="pt">第 12 章 · #3 · 398 tok ：林三跪在青石阶上，雨水顺着发梢滴落……</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>04</i> 三份存储的建模边界</h2>
+  <p class="lead">Milvus 存向量、Neo4j 存关系、PG 存事实与状态。正文只放在 PG 与原文文件里——向量库与图谱都是「可重建的派生索引」。</p>
+  <div class="schemas">
+    <div class="panel schema">
+      <h3>Milvus 3.0 <span class="tag">novel_chunks_v1</span></h3>
+      <ul>
+        <li><span>chunk_id</span><span>PK · {novel}:{ch}:{seq}</span></li>
+        <li><span>novel_id</span><span>partition key</span></li>
+        <li><span>level</span><span>1 child / 2 parent / 3 摘要</span></li>
+        <li><span>dense</span><span>FLOAT_VECTOR 1024 · HNSW M32</span></li>
+        <li><span>sparse</span><span>SPARSE_FLOAT_VECTOR · SINDI</span></li>
+        <li><span>chapter_no</span><span>INVERTED 索引</span></li>
+        <li><span>speakers / entities</span><span>ARRAY 标量过滤</span></li>
+      </ul>
+    </div>
+    <div class="panel schema">
+      <h3>Neo4j 5.x <span class="tag">图模型</span></h3>
+      <ul>
+        <li><span>节点</span><span>Novel Chapter Character…</span></li>
+        <li><span>Faction / Location</span><span>势力 · 地点</span></li>
+        <li><span>Item / Event / Concept</span><span>物品 · 事件 · 设定</span></li>
+        <li><span>RELATED_TO</span><span>relation 属性扩展</span></li>
+        <li><span>APPEARS_IN</span><span>人物→章节 热度</span></li>
+        <li><span>PARTICIPATES_IN</span><span>人物→事件 角色</span></li>
+        <li><span>约束</span><span>(novel_id, name) 唯一</span></li>
+      </ul>
+    </div>
+    <div class="panel schema">
+      <h3>PostgreSQL <span class="tag">元数据与状态</span></h3>
+      <ul>
+        <li><span>novels</span><span>manifest 版本标记</span></li>
+        <li><span>chapters</span><span>字符偏移 · 摘要</span></li>
+        <li><span>chunks</span><span>正文 + 父子关系</span></li>
+        <li><span>jobs / job_steps</span><span>状态机 · 断点</span></li>
+        <li><span>chat_messages</span><span>引用 · 耗时 · token</span></li>
+        <li><span>vector_projection</span><span>UMAP 预计算坐标</span></li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>05</i> 性能目标（验收基线）</h2>
+  <p class="lead">以下指标写入验收清单，每项都要有可复现的测量脚本，不接受「感觉挺快」。</p>
+  <div class="kpis">
+    <div class="kpi"><div class="v">30<em>min</em></div><div class="l">100 万字全流程</div><div class="n">解析→切块→向量→图谱</div></div>
+    <div class="kpi"><div class="v">300<em>ms</em></div><div class="l">检索 P95</div><div class="n">混合召回 + rerank</div></div>
+    <div class="kpi"><div class="v">2<em>s</em></div><div class="l">问答首字 P95</div><div class="n">SSE 首 token</div></div>
+    <div class="kpi"><div class="v">0.85<em>+</em></div><div class="l">Recall@10</div><div class="n">100 条标注评测集</div></div>
+    <div class="kpi"><div class="v">500<em>/s</em></div><div class="l">向量写入吞吐</div><div class="n">批 500 · upsert</div></div>
+    <div class="kpi"><div class="v">85<em>%</em></div><div class="l">实体抽取准确率</div><div class="n">抽样 200 条人工核验</div></div>
+    <div class="kpi"><div class="v">75<em>%</em></div><div class="l">关系抽取准确率</div><div class="n">证据回查 + 置信度闸门</div></div>
+    <div class="kpi"><div class="v">20<em>QPS</em></div><div class="l">问答并发</div><div class="n">单机 4C8G + 外部 LLM</div></div>
+  </div>
+</section>
+
+<section>
+  <h2><i>06</i> 实施优先级与交付标准</h2>
+  <p class="lead">六个阶段约 37 人日（1 后端 + 1 前端）。P0 先打通「能问」的闭环，P1 补质量与可视化，P2 做生产化。</p>
+  <div class="road">
+    <div class="phase p0">
+      <header><span class="p">P0 · MVP 闭环</span><span class="d">≈ 13 人日</span></header>
+      <div class="body">
+        <p class="goal">上传一本书，能基于向量检索问到答案，全程不碰命令行。</p>
+        <ul>
+          <li>上传 / 去重 / 本地存储</li>
+          <li>解析 + 分章 + 三层切块</li>
+          <li>本地 bge-small 向量 + Milvus 写入</li>
+          <li>切片完成度复核页</li>
+          <li>纯向量 RAG + SSE 流式</li>
+          <li>最小管理台（4 页）</li>
+        </ul>
+        <div class="accept"><b>验收：</b>100 万字 &lt; 30 min；重复跑实体数不变；切片页可见进度/告警/抽样；20 条问题相关性 ≥ 3.5/5。</div>
+      </div>
+    </div>
+    <div class="phase p1">
+      <header><span class="p">P1 · 图谱与质量</span><span class="d">≈ 15 人日</span></header>
+      <div class="body">
+        <p class="goal">知识图谱上线，检索从单通道升级为混合 + 精排，两个可视化页面可用。</p>
+        <ul>
+          <li>LLM 抽取 + 别名对齐 + Neo4j</li>
+          <li>混合检索 + RRF + rerank</li>
+          <li>图谱可视化（G6，2 跳子图）</li>
+          <li>向量降维散点（UMAP 预计算）</li>
+          <li>完整管理台四模块</li>
+        </ul>
+        <div class="accept"><b>验收：</b>Recall@10 ≥ 0.85 且比纯向量基线高 8pt；200 节点子图渲染 &lt; 1 s。</div>
+      </div>
+    </div>
+    <div class="phase p2">
+      <header><span class="p">P2 · 生产化</span><span class="d">≈ 10 人日</span></header>
+      <div class="body">
+        <p class="goal">从「能演示」到「能长期跑」：评测、审核、监控、切换对象存储。</p>
+        <ul>
+          <li>100 条评测集 + 回归脚本</li>
+          <li>低置信实体人工审核队列</li>
+          <li>Grafana 看板 + 依赖健康降级</li>
+          <li>S3 适配器（MinIO 验证）</li>
+          <li>压测 + 限流 + 成本看板</li>
+        </ul>
+        <div class="accept"><b>验收：</b><code>make eval</code> 一键出报表；20 QPS 压测零错误；切 S3 零代码改动。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>07</i> 主要风险与对策</h2>
+  <div class="panel" style="padding:8px 18px 10px">
+    <table class="tbl">
+      <thead>
+        <tr><th style="width:26%">风险</th><th style="width:9%">影响</th><th>对策</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Token 当成 URI 用</td><td><span class="dot h"></span>阻断</td><td>补 <code>MILVUS_URI</code>；配置层检测无 scheme 即判定为 Token，启动 fail-fast 并打印明确提示</td></tr>
+        <tr><td>LLM 抽取编造关系</td><td><span class="dot h"></span>高</td><td>三道闸门：<code>confidence≥0.6</code> + <code>evidence</code> 原文回查 + 关系枚举校验；低置信进人工队列</td></tr>
+        <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>别名对齐（编辑距离 + 字符重叠 + 向量相似）+ LLM 仲裁；管理台提供实体合并</td></tr>
+        <tr><td>Milvus SDK 与 3.0 服务端错配</td><td><span class="dot m"></span>中</td><td>锁定 <code>pymilvus</code> 实测版本；启动做索引能力探测，SINDI 失败回退 SPARSE_INVERTED_INDEX</td></tr>
+        <tr><td>云端网络延迟 / 限流</td><td><span class="dot m"></span>中</td><td>批写 + 客户端限速 + 指数退避；检索超时 3 s 降级到缓存结果</td></tr>
+        <tr><td>章节切分错误（无章节号长文）</td><td><span class="dot m"></span>中</td><td>多级正则兜底 + 长度约束二次切；管理台支持手动修正章节边界</td></tr>
+        <tr><td>360 网关限流 / 超时</td><td><span class="dot h"></span>高</td><td>信号量 4 + 429 指数退避；抽取失败转规则抽取并标记 low_confidence；保留 DeepSeek 备份通道（改 base_url 即切）</td></tr>
+        <tr><td>大图渲染卡死</td><td><span class="dot l"></span>低</td><td>后端强制 <code>limit</code>，超 500 节点返回 <code>truncated=true</code> 并提示缩小范围</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.1</span>
+  <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
+</footer>
+
+</div>
+</body>
+</html>
