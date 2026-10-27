@@ -24,6 +24,7 @@ data/chat_sse.txt
 backend/data/bench*.txt
 backend/data/real_chunks.json
 backend/data/*.log
+backend/data/_*.json
 *.log
 
 # 大体积样本原文（本地素材，不入库）
