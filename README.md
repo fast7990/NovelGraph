@@ -147,7 +147,7 @@ frontend/           React + Vite + TS + Semi Design，5 个页面
 data/samples/       样本生成脚本与产物
 scripts/            迁移（migrate_to_pg）· 检索评测（eval_retrieval）
 tools/              pgvector Windows 预编译包与安装脚本
-docs/               架构设计说明书 v1.5 · OpenAPI · 架构图
+docs/               架构设计说明书 v1.6 · 架构图（architecture.html）
 ```
 
 ## 前端

@@ -217,30 +217,30 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.5</div>
+  <div class="eyebrow">Technical Architecture · v1.6</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
-    原始文本 → 向量库（Milvus 3.0）+ 知识图谱（Neo4j）→ 可视化中台 + 大模型增强问答。
-    写入异步可重跑，查询同步可降级，两个引擎共享同一套标识体系。
+    原始文本 → 向量与倒排（PostgreSQL + pgvector）+ 知识图谱（Neo4j）→ 可视化中台 + 大模型增强问答。
+    写入异步可重跑，查询同步可降级，正文、向量、词法索引同库同事务。
   </p>
   <div class="meta">
-    <span class="chip"><b>Milvus</b> 3.0.x · 阿里杭州托管</span>
-    <span class="chip"><b>Neo4j</b> 5.x</span>
+    <span class="chip"><b>PostgreSQL</b> 18.6 + pgvector 0.8.7 · 本机</span>
+    <span class="chip"><b>Neo4j</b> 5.x（P1）</span>
     <span class="chip"><b>大模型</b> 360 网关 · z-ai/glm-5</span>
     <span class="chip"><b>Embedding</b> 本地 int8 · bge-large-zh · 1024 维 / 8 线程</span>
-    <span class="chip"><b>后端</b> FastAPI + Celery · uv</span>
-    <span class="chip"><b>前端</b> React + G6 + ECharts · pnpm</span>
+    <span class="chip"><b>后端</b> FastAPI + asyncio worker · uv</span>
+    <span class="chip"><b>前端</b> React + Semi Design · pnpm</span>
   </div>
 </header>
 
 <div class="notes">
-  <div class="note warn">
-    <h3>① 连接参数需要拆分</h3>
-    <p>你给的 <span class="k">a0fb1431…8704e</span> 是纯十六进制串，没有 scheme/host，形态是 Token。必须补 <span class="k">MILVUS_URI</span>（实例地址），Token 放 <span class="k">MILVUS_TOKEN</span>。配置层做格式兜底 + 启动自检，避免上线才发现连不上。</p>
-  </div>
   <div class="note ok">
-    <h3>② 3.0 改变了分工</h3>
-    <p>服务端 BM25 + 新稀疏索引（体积约 2.6 版的 1/3）、SINDI 学习型稀疏、服务端 ORDER BY/聚合。混合检索可以少跑一个客户端编码器，统计面板可以下推引擎。</p>
+    <h3>① 存储收敛到一个 PostgreSQL</h3>
+    <p>正文、元数据、向量、词法倒排同库：配置只有 <span class="k">DATABASE_URL</span>。派生表 <span class="k">chunk_vectors</span> / <span class="k">chunk_lexical</span> 对 <span class="k">chunks(id)</span> 加外键 <span class="k">ON DELETE CASCADE</span>——"书删了向量还在、worker 还在算两小时"这类孤儿数据，在数据库层面已不可表达。</p>
+  </div>
+  <div class="note warn">
+    <h3>② pgvector 的两个坑必须提前处理</h3>
+    <p><b>过滤召回不足</b>：HNSW 先取候选再套 <span class="k">WHERE novel_id</span>，单书占比小时会不足甚至返回 0 且不报错 → 必须 <span class="k">SET LOCAL hnsw.iterative_scan = relaxed_order</span>。<b>中文两字词</b>：PG 默认分词器不切中文 → 正文切 bigram 再建 <span class="k">tsvector</span>，启动时用 <span class="k">_probe_cjk()</span> 自检，不通过就关词法通道并降级 <span class="k">dense_only</span>。</p>
   </div>
   <div class="note">
     <h3>③ 大模型走 OpenAI 兼容网关</h3>
@@ -310,7 +310,7 @@
         <text class="bandlbl" x="40" y="276">能力层 · CAPABILITY</text>
 
         <rect class="tealf" x="40" y="288" width="238" height="88" rx="8"/>
-        <text class="tealt" x="56" y="311">写入管道（Celery Worker）</text>
+        <text class="tealt" x="56" y="311">写入管道（asyncio worker）</text>
         <text class="boxs" x="56" y="332">worker-ingest：解析 → 切块 → 编码</text>
         <text class="boxs" x="56" y="349">worker-graph：LLM 抽取 → 对齐</text>
         <text class="boxs" x="56" y="366">检查点续跑 · 幂等 upsert</text>
@@ -330,24 +330,24 @@
         <rect class="tealf" x="796" y="288" width="244" height="88" rx="8"/>
         <text class="tealt" x="812" y="311">适配层 M8</text>
         <text class="boxs" x="812" y="332">Storage：Local ⇄ S3</text>
-        <text class="boxs" x="812" y="349">Vector：MilvusClient 封装</text>
+        <text class="boxs" x="812" y="349">Vector：pgvector 封装</text>
         <text class="boxs" x="812" y="366">Graph / Embedding / LLM Provider</text>
 
         <!-- 存储层 -->
         <rect class="band" x="20" y="410" width="1040" height="112" rx="10"/>
         <text class="bandlbl" x="40" y="434">存储层 · STORAGE</text>
         <rect class="stor" x="40" y="446" width="246" height="60" rx="8"/>
-        <text class="stort" x="58" y="470">Milvus 3.0（向量）</text>
-        <text class="ch" x="58" y="489">chunk 双向量 · partition_key=novel_id</text>
+        <text class="stort" x="58" y="470">PostgreSQL · 向量与倒排</text>
+        <text class="ch" x="58" y="489">chunk_vectors HNSW · chunk_lexical GIN</text>
         <rect class="stor" x="300" y="446" width="246" height="60" rx="8"/>
-        <text class="stort" x="318" y="470">Neo4j（图谱）</text>
+        <text class="stort" x="318" y="470">Neo4j（图谱 · P1）</text>
         <text class="ch" x="318" y="489">7 类节点 · 10 类关系 · 唯一约束</text>
         <rect class="stor" x="560" y="446" width="246" height="60" rx="8"/>
-        <text class="stort" x="578" y="470">PostgreSQL（元数据）</text>
+        <text class="stort" x="578" y="470">PostgreSQL · 正文与状态</text>
         <text class="ch" x="578" y="489">novels/chapters/chunks/jobs/messages</text>
         <rect class="stor" x="820" y="446" width="220" height="60" rx="8"/>
-        <text class="stort" x="838" y="470">Redis + 本地文件 / S3</text>
-        <text class="ch" x="838" y="489">缓存 · 队列 · 原文可切换</text>
+        <text class="stort" x="838" y="470">本地文件 / S3</text>
+        <text class="ch" x="838" y="489">原文存储 · 可切换对象存储</text>
 
         <!-- 外部服务 -->
         <rect class="band" x="20" y="540" width="1040" height="84" rx="10" stroke-dasharray="4 3"/>
@@ -357,7 +357,7 @@
         <rect class="box" x="356" y="576" width="300" height="34" rx="7"/>
         <text class="boxt" x="372" y="598">本地 Embedding（CPU 可跑）</text>
         <rect class="box" x="672" y="576" width="368" height="34" rx="7"/>
-        <text class="boxt" x="688" y="598">bge-reranker-v2-m3（CPU 可跑）</text>
+        <text class="boxt" x="688" y="598">bge-reranker-base（CPU 可跑）</text>
 
         <!-- 箭头 -->
         <line x1="540" y1="102" x2="540" y2="116" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
@@ -365,7 +365,7 @@
         <line x1="540" y1="392" x2="540" y2="408" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
         <line x1="540" y1="522" x2="540" y2="538" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
       </svg>
-      <figcaption>四层架构：写入与查询在能力层分置，共享 Milvus / Neo4j / PG 三份存储</figcaption>
+      <figcaption>四层架构：写入与查询在能力层分置，共享单库 PostgreSQL 与 Neo4j 两份存储</figcaption>
     </figure>
   </div>
 </section>
@@ -383,11 +383,11 @@
         <li data-n="1"><b>上传与去重</b>sha256 命中则直接返回已有 <code>novel_id</code>；文件落 <code>raw/{novel_id}/</code></li>
         <li data-n="2"><b>解析</b>编码探测（GB18030 兜底）→ 目录剔除 → 章节正则 + 长度兜底 → 清洗</li>
         <li data-n="3"><b>分层切块</b>parent 1400 tokens / child 400 tokens（overlap 60），对话归属识别</li>
-        <li data-n="4"><b>章节摘要</b>v4-flash 并发 8，产出 150 字样章摘要（同时入向量库 level=3）</li>
-        <li data-n="5"><b>双通道向量化</b>本地 bge-large-zh（int8 · 1024 维 · 8 线程）出稠密向量，稀疏走 Milvus 服务端 BM25；有 GPU 换 bge-m3 一次出双向量</li>
-        <li data-n="6"><b>图谱抽取</b>规则候选 → v4-pro JSON 抽取 → 别名对齐 → 置信度闸门</li>
-        <li data-n="7"><b>入库</b>Milvus 批 500 upsert；Neo4j 单事务 1000 条 UNWIND MERGE</li>
-        <li data-n="8"><b>索引就绪</b>create_index + load；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
+        <li data-n="4"><b>章节摘要</b>glm-5 并发 8，产出 150 字样章摘要（可选，ENABLE_CHAPTER_SUMMARY）</li>
+        <li data-n="5"><b>向量化 + 倒排</b>本地 bge-large-zh（int8 · 1024 维 · 8 线程）出稠密向量；同一批文本切 bigram 建 <code>tsvector</code> 倒排，两条路径互不依赖</li>
+        <li data-n="6"><b>图谱抽取</b>规则候选 → glm-5 JSON 抽取 → 别名对齐 → 置信度闸门（P1）</li>
+        <li data-n="7"><b>入库</b>PG 批 16-64 条 <code>INSERT … ON CONFLICT</code>；Neo4j 单事务 1000 条 UNWIND MERGE</li>
+        <li data-n="8"><b>索引就绪</b>HNSW / GIN 首次自动建；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
       </ol>
     </div>
     <div class="panel flow read">
@@ -396,12 +396,12 @@
         <h3>问答链路（P95 首字 &lt; 2 s）</h3>
       </div>
       <ol class="steps">
-        <li data-n="1"><b>Query 改写</b>v4-flash 做指代消解 + 关键词/实体抽取 → <code>standalone_query</code></li>
-        <li data-n="2"><b>并行召回</b>Milvus hybrid（ef=64，filter <code>novel_id</code> + <code>level==1</code>，limit 50）</li>
+        <li data-n="1"><b>Query 改写</b>glm-5 做指代消解 + 关键词/实体抽取 → <code>standalone_query</code></li>
+        <li data-n="2"><b>并行召回</b>稠密 HNSW（<code>iterative_scan</code>，filter <code>novel_id</code>，limit 50）∥ 词法 <code>tsquery</code>（limit 50）</li>
         <li data-n="3"><b>图谱并发</b>实体定位 → 2-hop 子图（≤60 边）→ 三元组文本化（≤40 条）</li>
         <li data-n="4"><b>RRF 融合</b><code>Σ 1/(60+rank)</code>，对分值尺度不敏感，换模型不用调参</li>
-        <li data-n="5"><b>精排</b>bge-reranker-v2-m3，top50 → top8（约 80 ms）</li>
-        <li data-n="6"><b>回溯父块</b>child 命中 → 取 parent 原文，最多 4 个，控制在 8K token 内</li>
+        <li data-n="5"><b>精排</b>bge-reranker-base int8，top50 → top24（约 80 ms）</li>
+        <li data-n="6"><b>回溯父块</b>child 命中 → 按 parent 去重取 8 个，控制在 8K token 内</li>
         <li data-n="7"><b>Prompt 组装</b>固定前缀（字节稳定）+ 图谱事实 + 资料 + 历史，总预算 ≤ 8K</li>
         <li data-n="8"><b>流式生成</b>SSE 推 delta → citations → done；断连立即释放上游连接</li>
       </ol>
@@ -462,23 +462,23 @@
 </section>
 
 <section>
-  <h2><i>04</i> 三份存储的建模边界</h2>
-  <p class="lead">Milvus 存向量、Neo4j 存关系、PG 存事实与状态。正文只放在 PG 与原文文件里——向量库与图谱都是「可重建的派生索引」。</p>
+  <h2><i>04</i> 存储建模边界</h2>
+  <p class="lead">PostgreSQL 一个库同时存正文、状态、向量、倒排；Neo4j 存关系（P1）。正文是唯一事实源，向量与倒排都是「可重建的派生索引」——区别在于前两者与正文同库，能被外键和级联约束住。</p>
   <div class="schemas">
     <div class="panel schema">
-      <h3>Milvus 3.0 <span class="tag">novel_chunks_v1</span></h3>
+      <h3>chunk_vectors + chunk_lexical <span class="tag">向量与倒排</span></h3>
       <ul>
-        <li><span>chunk_id</span><span>PK · {novel}:{ch}:{seq}</span></li>
-        <li><span>novel_id</span><span>partition key</span></li>
-        <li><span>level</span><span>1 child / 2 parent / 3 摘要</span></li>
-        <li><span>dense</span><span>FLOAT_VECTOR 1024 · HNSW M32</span></li>
-        <li><span>sparse</span><span>SPARSE_FLOAT_VECTOR · SINDI</span></li>
-        <li><span>chapter_no</span><span>INVERTED 索引</span></li>
-        <li><span>speakers / entities</span><span>ARRAY 标量过滤</span></li>
+        <li><span>chunk_id</span><span>PK · FK → chunks(id) CASCADE</span></li>
+        <li><span>novel_id</span><span>btree 索引 · 过滤键</span></li>
+        <li><span>embedding</span><span>vector(1024) · HNSW m=16</span></li>
+        <li><span>bigrams</span><span>bigram 串 · 可诊断</span></li>
+        <li><span>tsv</span><span>tsvector · GIN 倒排</span></li>
+        <li><span>检索参数</span><span>ef_search 100 · iterative_scan</span></li>
+        <li><span>删除</span><span>级联 · 不会留孤儿</span></li>
       </ul>
     </div>
     <div class="panel schema">
-      <h3>Neo4j 5.x <span class="tag">图模型</span></h3>
+      <h3>Neo4j 5.x <span class="tag">图模型（P1）</span></h3>
       <ul>
         <li><span>节点</span><span>Novel Chapter Character…</span></li>
         <li><span>Faction / Location</span><span>势力 · 地点</span></li>
@@ -490,14 +490,14 @@
       </ul>
     </div>
     <div class="panel schema">
-      <h3>PostgreSQL <span class="tag">元数据与状态</span></h3>
+      <h3>PostgreSQL <span class="tag">正文与状态</span></h3>
       <ul>
-        <li><span>novels</span><span>manifest 版本标记</span></li>
+        <li><span>novels</span><span>meta jsonb · 三计数</span></li>
         <li><span>chapters</span><span>字符偏移 · 摘要</span></li>
-        <li><span>chunks</span><span>正文 + 父子关系</span></li>
-        <li><span>jobs / job_steps</span><span>状态机 · 断点</span></li>
-        <li><span>chat_messages</span><span>引用 · 耗时 · token</span></li>
-        <li><span>vector_projection</span><span>UMAP 预计算坐标</span></li>
+        <li><span>chunks</span><span>正文 + 父子（level 1/2）</span></li>
+        <li><span>jobs</span><span>状态机 · 进度计数</span></li>
+        <li><span>chunk_reports</span><span>切片告警行</span></li>
+        <li><span>chat_sessions / messages</span><span>会话 · 引用</span></li>
       </ul>
     </div>
   </div>
@@ -529,7 +529,7 @@
         <ul>
           <li>上传 / 去重 / 本地存储</li>
           <li>解析 + 分章 + 三层切块</li>
-          <li>本地 bge-large 向量（1024 维）+ Milvus 写入</li>
+          <li>本地 bge-large 向量（1024 维）+ 词法倒排入库</li>
           <li>切片完成度复核页</li>
           <li>纯向量 RAG + SSE 流式</li>
           <li>最小管理台（4 页）</li>
@@ -576,11 +576,11 @@
         <tr><th style="width:26%">风险</th><th style="width:9%">影响</th><th>对策</th></tr>
       </thead>
       <tbody>
-        <tr><td>Token 当成 URI 用</td><td><span class="dot h"></span>阻断</td><td>补 <code>MILVUS_URI</code>；配置层检测无 scheme 即判定为 Token，启动 fail-fast 并打印明确提示</td></tr>
+        <tr><td>目标库没装 pgvector</td><td><span class="dot h"></span>阻断</td><td>启动查 <code>pg_extension</code>，缺失即抛带安装指引的 <code>RuntimeError</code>；Docker 用 <code>pgvector/pgvector:pg18</code></td></tr>
         <tr><td>LLM 抽取编造关系</td><td><span class="dot h"></span>高</td><td>三道闸门：<code>confidence≥0.6</code> + <code>evidence</code> 原文回查 + 关系枚举校验；低置信进人工队列</td></tr>
         <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>别名对齐（编辑距离 + 字符重叠 + 向量相似）+ LLM 仲裁；管理台提供实体合并</td></tr>
-        <tr><td>Milvus SDK 与 3.0 服务端错配</td><td><span class="dot m"></span>中</td><td>锁定 <code>pymilvus</code> 实测版本；启动做索引能力探测，SINDI 失败回退 SPARSE_INVERTED_INDEX</td></tr>
-        <tr><td>云端网络延迟 / 限流</td><td><span class="dot m"></span>中</td><td>批写 + 客户端限速 + 指数退避；检索超时 3 s 降级到缓存结果</td></tr>
+        <tr><td>HNSW 索引没建（懒建机制）</td><td><span class="dot h"></span>高</td><td>检索退化为全表扫描、随数据量线性变慢；<code>/health</code> 暴露 <code>index</code> 字段，迁移后查 <code>pg_indexes</code> 补建</td></tr>
+        <tr><td>过滤检索召回不足</td><td><span class="dot m"></span>中</td><td>HNSW 先取候选再过滤，单书占比小时不足且不报错；每次检索事务内 <code>SET LOCAL hnsw.iterative_scan=relaxed_order</code></td></tr>
         <tr><td>章节切分错误（无章节号长文）</td><td><span class="dot m"></span>中</td><td>多级正则兜底 + 长度约束二次切；管理台支持手动修正章节边界</td></tr>
         <tr><td>360 网关限流 / 超时</td><td><span class="dot h"></span>高</td><td>信号量 4 + 429 指数退避；抽取失败转规则抽取并标记 low_confidence；保留 DeepSeek 备份通道（改 base_url 即切）</td></tr>
         <tr><td>大图渲染卡死</td><td><span class="dot l"></span>低</td><td>后端强制 <code>limit</code>，超 500 节点返回 <code>truncated=true</code> 并提示缩小范围</td></tr>
