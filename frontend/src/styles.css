@@ -214,19 +214,8 @@ body {
   border-radius: 0 0 8px 8px;
   overflow: hidden;
 }
-.graph-svg { width: 100%; height: 100%; display: block; cursor: grab; }
-.graph-svg:active { cursor: grabbing; }
-
-.graph-label {
-  fill: var(--semi-color-text-1);
-  pointer-events: none;
-  paint-order: stroke;
-  stroke: var(--semi-color-bg-1);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-}
-.graph-node circle { transition: fill-opacity .15s ease; }
-.graph-node:hover circle { fill-opacity: 1; }
+/* Cytoscape 自己往这个容器里塞 canvas，位置/动画由它负责 */
+.graph-canvas { width: 100%; height: 100%; }
 
 .graph-tips {
   position: absolute;

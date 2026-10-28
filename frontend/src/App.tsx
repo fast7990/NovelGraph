@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Suspense, lazy, useEffect, useState } from 'react'
 import { Layout, Nav } from '@douyinfe/semi-ui'
 import {
   IconApartment,
@@ -15,7 +15,8 @@ import Upload from './pages/Upload'
 import ChunkReview from './pages/ChunkReview'
 import Chat from './pages/Chat'
 import VectorView from './pages/VectorView'
-import GraphView from './pages/GraphView'
+// 图谱页带 Cytoscape + fcose（约 400KB），只有进这个 tab 才加载
+const GraphView = lazy(() => import('./pages/GraphView'))
 import Tasks from './pages/Tasks'
 import DebugSearch from './pages/DebugSearch'
 import { api } from './api/client'
@@ -119,7 +120,11 @@ export default function App() {
         {tab === 'tasks' && <Tasks novelId={novelId} onGo={go} />}
         {tab === 'chunks' && <ChunkReview novelId={novelId} onPick={setNovelId} />}
         {tab === 'vector' && <VectorView novelId={novelId} onPick={setNovelId} />}
-        {tab === 'graph' && <GraphView novelId={novelId} onPick={setNovelId} />}
+        {tab === 'graph' && (
+          <Suspense fallback={<div style={{ padding: 60, textAlign: 'center', color: 'var(--semi-color-text-3)' }}>图谱页加载中…</div>}>
+            <GraphView novelId={novelId} onPick={setNovelId} />
+          </Suspense>
+        )}
         {tab === 'search' && <DebugSearch novelId={novelId} onPick={setNovelId} />}
         {tab === 'chat' && <Chat novelId={novelId} onPick={setNovelId} />}
       </Layout.Content>

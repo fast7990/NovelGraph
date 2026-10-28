@@ -403,6 +403,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
                 pageSize: 10,
                 total,
                 showSizeChanger: false,
+                style: { marginBottom: 12 },
                 onPageChange: (p) => setPage(p),
               }}
               empty={<Empty title="暂无切片" description="这本书还没有切块数据" />}

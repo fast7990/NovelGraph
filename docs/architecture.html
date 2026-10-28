@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.7</div>
+  <div class="eyebrow">Technical Architecture · v1.8</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -228,7 +228,7 @@
     <span class="chip"><b>大模型</b> 360 网关 · glm-5（问答）+ deepseek-chat-v3（抽取）</span>
     <span class="chip"><b>Embedding</b> 本地 int8 · bge-large-zh · 1024 维 / 8 线程</span>
     <span class="chip"><b>后端</b> FastAPI + asyncio worker · uv</span>
-    <span class="chip"><b>前端</b> React + Semi Design · 自研 SVG 力导向 · pnpm</span>
+    <span class="chip"><b>前端</b> React + Semi Design · Cytoscape.js + fcose · pnpm</span>
   </div>
 </header>
 
@@ -558,8 +558,8 @@
       <text x="32" y="205" font-size="10.5" fill="#475569">N 跳子图：递归 CTE，depth &lt; hops 防环</text>
 
       <rect x="556" y="144" width="468" height="72" rx="9" fill="#f8fafc" stroke="#dfe5ee"/>
-      <text x="572" y="168" font-size="12.5" font-weight="600" fill="#0f172a">前端图谱页（自研 SVG 力导向）</text>
-      <text x="572" y="188" font-size="10.5" fill="#7c8798">拖拽 / 滚轮缩放 / 双击邻域展开 · 点节点出侧栏 · 点边看证据原文</text>
+      <text x="572" y="168" font-size="12.5" font-weight="600" fill="#0f172a">前端图谱页（Cytoscape.js + fcose）</text>
+      <text x="572" y="188" font-size="10.5" fill="#7c8798">拖拽 / 滚轮缩放 / 点节点高亮一跳邻域 · 点节点出侧栏 · 点边看证据原文</text>
       <text x="572" y="205" font-size="10.5" fill="#7c8798">默认 2 跳 · 节点上限 200 / 边 400 · 超限返回 truncated</text>
 
       <line x1="540" y1="180" x2="554" y2="180" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
@@ -576,7 +576,7 @@
       </div>
       <div>
         <div style="font-weight:600;color:var(--ink);margin-bottom:4px">中栏 · 画布</div>
-        力导向布局，节点大小 = importance、颜色 = 类型、边粗细 = strength；<span style="font-family:var(--mono);font-size:12.5px">pending</span> 边画虚线
+        Cytoscape.js + fcose 力导向：节点大小 = importance、颜色 = 类型、边粗细 = strength；<span style="font-family:var(--mono);font-size:12.5px">pending</span> 边画虚线；只画有关系的实体，孤立实体数量在左下提示
       </div>
       <div>
         <div style="font-weight:600;color:var(--ink);margin-bottom:4px">右栏 · 详情</div>
@@ -707,12 +707,12 @@
         <ul>
           <li>LLM 抽取（按块）+ 别名对齐 + <b>PG 三表</b></li>
           <li>混合检索 + RRF + rerank</li>
-          <li>图谱可视化（自研 SVG 力导向，2 跳子图）</li>
+          <li>图谱可视化（Cytoscape.js + fcose，2 跳子图）</li>
           <li>图谱事实注入问答（use_graph）</li>
           <li>向量降维散点（UMAP 预计算）</li>
           <li>完整管理台四模块</li>
         </ul>
-        <div class="accept"><b>验收：</b>Recall@10 ≥ 0.85 且比纯向量基线高 8pt；200 节点子图渲染 &lt; 1 s；抽取证据零丢弃（《长夜将明》87 实体 / 164 关系已达标）。</div>
+        <div class="accept"><b>验收：</b>Recall@10 ≥ 0.85 且比纯向量基线高 8pt；200 节点子图布局 + 渲染 &lt; 3 s；抽取证据零丢弃（《长夜将明》87 实体 / 164 关系已达标）。</div>
       </div>
     </div>
     <div class="phase p2">
@@ -755,7 +755,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.7</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.8</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

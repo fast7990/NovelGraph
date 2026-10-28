@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import Text, cast, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
@@ -112,7 +112,10 @@ async def list_entities(
         # 别名是 jsonb 数组，转文本后模糊匹配够用（实体数量级只有千级，
         # 不需要为"按别名搜索"单独建 GIN 索引）
         like = f"%{q}%"
-        cond = or_(Entity.name.ilike(like), func.cast(Entity.aliases, text("text")).ilike(like), Entity.desc.ilike(like))
+        # 注意用 sqlalchemy.cast(col, Text) 而不是 func.cast(col, text("text")):
+        # 后者生成的是函数调用节点，没有类型信息，接 .ilike() 会抛
+        # TypeError: TextClause ... is not a TypeEngine
+        cond = or_(Entity.name.ilike(like), cast(Entity.aliases, Text).ilike(like), Entity.desc.ilike(like))
         stmt = stmt.where(cond)
         count_stmt = count_stmt.where(cond)
 
@@ -203,6 +206,9 @@ async def subgraph(
         if not node_ids:
             # 孤立实体（没有任何边）：至少把它自己画出来
             node_ids = [center]
+        elif center not in node_ids:
+            # 双保险：中心节点必须出现在自己的邻域图里
+            node_ids = [center, *node_ids]
     else:
         rows = (
             await db.execute(
@@ -267,7 +273,12 @@ WITH RECURSIVE nb(entity_id, depth) AS (
       AND nb.depth < :hops
       AND (:include_pending OR r.status = 'active')
 )
-SELECT DISTINCT entity_id FROM nb LIMIT :max_nodes
+SELECT entity_id
+FROM (SELECT entity_id, MIN(depth) AS d FROM nb GROUP BY entity_id) t
+-- 不带 ORDER BY 的 LIMIT 是"随机砍尾"：邻域超过上限时中心节点会被砍掉，
+-- 于是"点开某人"的图里没有他自己。按深度优先保证中心一定在里面。
+ORDER BY d, entity_id
+LIMIT :max_nodes
 """
 )
 
