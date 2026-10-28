@@ -5,6 +5,8 @@
 - 抽取模型固定 `deepseek-chat-v3`（`z-ai/glm-5` 是推理模型，content 为空，thinking 开关不生效）
 - 取消信号两套，不许合并：`cancel(novel_id)` 要清派生数据，`cancel_job(job_id)` 一个字节都不删
 - 本地跑服务用项目 venv：`backend/.venv/Scripts/python.exe`，不要用全局 python
+- **venv 解释器必须是 3.11.9（Store 版）**：Anaconda 的 3.12.4 会让 `import onnxruntime` 直接 segfault（exit 139），启动时表现为 server 子进程静默消失
+- `uv sync` 必须带 `UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple`，默认源在本机 20+ 分钟无进展
 
 ## 前端
 - 轮询**一律走 `src/hooks/usePoll.ts`**，禁止在页面里手写 `setInterval`

@@ -80,6 +80,10 @@ class GraphBuildStats:
     merged_pairs: int = 0
     llm_calls: int = 0
     llm_errors: int = 0
+    llm_prompt_tokens: int = 0
+    llm_completion_tokens: int = 0
+    llm_total_tokens: int = 0
+    llm_calls_without_usage: int = 0
     dropped_no_evidence: int = 0
     dropped_honorific_alias: int = 0
     evidence_partial: int = 0
@@ -97,6 +101,12 @@ class GraphBuildStats:
             "merged_pairs": self.merged_pairs,
             "llm_calls": self.llm_calls,
             "llm_errors": self.llm_errors,
+            "llm_tokens": {
+                "prompt": self.llm_prompt_tokens,
+                "completion": self.llm_completion_tokens,
+                "total": self.llm_total_tokens,
+            },
+            "llm_calls_without_usage": self.llm_calls_without_usage,
             "dropped_no_evidence": self.dropped_no_evidence,
             "dropped_honorific_alias": self.dropped_honorific_alias,
             "evidence_partial": self.evidence_partial,
@@ -223,6 +233,20 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
 
     await _progress(job_id, stage="GRAPH_EXTRACTING", chapters_total=len(by_chapter))
 
+    def sync_usage() -> None:
+        """把 client 里按 job_id 累加的 token 用量刷进 stats（取快照，不清空）。
+
+        client 侧只负责计数，任务侧负责归属与落库——这样抽取层不必关心记账，
+        并发多本书时也不会互相串味。
+        """
+        u = llm.usage_of(job_id)
+        if not u:
+            return
+        stats.llm_prompt_tokens = int(u.get("prompt_tokens", 0))
+        stats.llm_completion_tokens = int(u.get("completion_tokens", 0))
+        stats.llm_total_tokens = int(u.get("total_tokens", 0))
+        stats.llm_calls_without_usage = int(u.get("usage_missing", 0))
+
     async def run_chapter(no: int, chapter_blocks: list[_Block]) -> None:
         nonlocal done
         known: list[str] = list(chapter_known.get(no, []))
@@ -232,7 +256,14 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
                 raise IngestCancelled(novel_id)
             if is_job_cancelled(job_id):
                 raise JobCancelled(job_id)
-            res = await extract_chunk(llm, b.content, chapter_no=no, chapter_title=title, known_names=known)
+            res = await extract_chunk(
+                llm,
+                b.content,
+                chapter_no=no,
+                chapter_title=title,
+                known_names=known,
+                usage_tag=job_id,
+            )
             acc.merge(res, b.chunk_id, no)
             stats.llm_calls += 1
             if res.stats.get("llm_error"):
@@ -243,11 +274,13 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
                     known.append(e.name)
             async with progress_lock:
                 done += 1
+                sync_usage()
                 await _progress(
                     job_id,
                     progress=round(85.0 * done / max(stats.blocks, 1), 1),
                     chunks_created=done,
                     chapters_done=no,
+                    stats=stats.as_dict(),
                 )
 
     async def guarded(no: int, bl: list[_Block]) -> None:
@@ -343,6 +376,7 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
     await _progress(job_id, stage="GRAPH_WRITING", progress=92.0)
     stats.mentions = await _persist(novel_id, aligned, best, mention_rows)
 
+    sync_usage()
     stats.duration_sec = round(time.monotonic() - started, 1)
     async with SessionLocal() as db:
         job = await db.get(Job, job_id)
@@ -367,7 +401,8 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
         await db.commit()
 
     logger.info(
-        "graph done novel=%s blocks=%s entities=%s relations=%s (%s active / %s pending) %.1fs",
+        "graph done novel=%s blocks=%s entities=%s relations=%s (%s active / %s pending) %.1fs "
+        "llm_calls=%s tokens=%s (prompt %s / completion %s, 无 usage 的调用 %s 次)",
         novel_id,
         stats.blocks,
         stats.entities,
@@ -375,7 +410,14 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
         stats.active,
         stats.pending,
         stats.duration_sec,
+        stats.llm_calls,
+        stats.llm_total_tokens,
+        stats.llm_prompt_tokens,
+        stats.llm_completion_tokens,
+        stats.llm_calls_without_usage,
     )
+    # 任务结束即释放计数桶，长跑进程里不会为历史任务一直占内存
+    llm.pop_usage(job_id)
 
 
 async def _persist(

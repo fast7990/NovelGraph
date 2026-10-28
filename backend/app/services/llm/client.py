@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import re
@@ -67,6 +68,10 @@ class LLMClient:
         self.fast_model = settings.fast_model
         self._sem = asyncio.Semaphore(max(1, settings.llm_max_concurrency))
         self._caps: dict[str, Any] = {"probed": False}
+        # 按调用方给的 tag（通常是 job_id）累加 token 用量。
+        # 不在全局累加，是因为同一个 client 实例会被并发任务共用，
+        # 全局计数会把两本书的消耗混在一起，账单就无法归因。
+        self._usage: dict[str, dict[str, Any]] = {}
 
     # ---------- 能力探测 ----------
     async def probe(self) -> dict:
@@ -160,6 +165,55 @@ class LLMClient:
             enable = settings.llm_thinking
         return {"thinking": {"type": "enabled" if enable else "disabled"}}
 
+    # ---------- 用量采集 ----------
+    def _record_usage(self, tag: str | None, resp: Any, model: str) -> None:
+        """把一次响应的 usage 累加进 `tag` 对应的桶。
+
+        并发安全：整个过程是纯字典累加、中间没有 await，在事件循环单线程里
+        不会被别的协程插进来，所以不需要锁；但**不能**从其他线程调用。
+
+        usage 缺失（部分网关不回 usage，或流式未开 include_usage）时只记 calls，
+        并在 `usage_missing` 里计数——这样"数字偏小"是可解释的，而不是看起来像没消耗。
+        """
+        if not tag:
+            return
+        bucket = self._usage.setdefault(
+            tag,
+            {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": 0,
+                "calls": 0,
+                "usage_missing": 0,
+                "models": {},
+            },
+        )
+        bucket["calls"] += 1
+        usage = getattr(resp, "usage", None)
+        if usage is None:
+            bucket["usage_missing"] += 1
+            return
+        prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+        completion = int(getattr(usage, "completion_tokens", 0) or 0)
+        total = int(getattr(usage, "total_tokens", 0) or (prompt + completion))
+        bucket["prompt_tokens"] += prompt
+        bucket["completion_tokens"] += completion
+        bucket["total_tokens"] += total
+        per_model = bucket["models"].setdefault(
+            model, {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0}
+        )
+        per_model["calls"] += 1
+        per_model["prompt_tokens"] += prompt
+        per_model["completion_tokens"] += completion
+
+    def usage_of(self, tag: str) -> dict:
+        """取一份快照，用于任务进行中展示（不清理）。"""
+        return copy.deepcopy(self._usage.get(tag) or {})
+
+    def pop_usage(self, tag: str) -> dict:
+        """取走并清理，任务结束时用，避免长跑进程里字典无限增长。"""
+        return self._usage.pop(tag, {})
+
     # ---------- 调用 ----------
     async def complete(
         self,
@@ -170,6 +224,7 @@ class LLMClient:
         json_mode: bool = False,
         model: str | None = None,
         thinking: bool | None = None,
+        usage_tag: str | None = None,
     ) -> str:
         kwargs: dict[str, Any] = {}
         if json_mode and self._caps.get("json_mode"):
@@ -185,6 +240,7 @@ class LLMClient:
                 **kwargs,
             )
         choice = resp.choices[0]
+        self._record_usage(usage_tag, resp, model or self.model)
         content = choice.message.content or ""
         if not content and getattr(choice.message, "reasoning_content", None):
             # 思考把预算吃光了。这是上游行为，不该静默返回空串让调用方以为"没内容"
@@ -204,6 +260,7 @@ class LLMClient:
         max_tokens: int = 4000,
         thinking: bool | None = False,
         model: str | None = None,
+        usage_tag: str | None = None,
     ) -> dict:
         text = await self.complete(
             messages,
@@ -212,6 +269,7 @@ class LLMClient:
             json_mode=True,
             thinking=thinking,
             model=model,
+            usage_tag=usage_tag,
         )
         return parse_json_loose(text)
 

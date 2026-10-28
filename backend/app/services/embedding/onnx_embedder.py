@@ -81,7 +81,9 @@ class OnnxEmbedder(BaseEmbedder):
         if total and got < total * 0.95:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"{remote} 下载不完整（{got}/{total}）")
-        if got < 1024:
+        # 阈值只能挡空响应：config.json / vocab.txt 等小文件本来就只有几百字节，
+        # 用 1KB 当下限会把它们全部误判成"内容异常"，导致整条 ONNX 链路降级成哈希。
+        if got < 32:
             tmp.unlink(missing_ok=True)
             raise RuntimeError(f"{remote} 下载内容异常（{got} bytes），检查 EMBEDDING_MS_REPO / EMBEDDING_ONNX_FILE")
         tmp.replace(self.model_dir / local)

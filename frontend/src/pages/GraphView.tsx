@@ -19,6 +19,7 @@ import PageHead from '../components/PageHead'
 import GraphCanvas, { TYPE_COLOR, TYPE_LABEL } from '../components/GraphCanvas'
 import {
   api,
+  fmtNum,
   GraphEntity,
   GraphEntityDetail,
   GraphOverview,
@@ -229,6 +230,10 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
 
   const job = status?.job
   const hasGraph = (ov?.entities || 0) > 0
+  // token 用量由后端按 job 累加写进 job.stats（llm_tokens），这里有就显示，没有就不占位
+  const tokens = job?.stats?.llm_tokens as
+    | { prompt?: number; completion?: number; total?: number }
+    | undefined
 
   return (
     <div className="stack" style={{ minHeight: 0 }}>
@@ -268,6 +273,11 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
           <Progress percent={Number(job?.progress || 0)} showInfo={false} stroke="var(--semi-color-primary)" />
           <div className="stat-foot" style={{ marginTop: 6 }}>
             抽取在后台串行执行，可离开本页；完成后自动刷新
+            {tokens?.total
+              ? ` · 已消耗 ${fmtNum(tokens.total)} token（输入 ${fmtNum(tokens.prompt)} / 输出 ${fmtNum(
+                  tokens.completion,
+                )}）`
+              : ''}
           </div>
         </Card>
       )}
@@ -308,6 +318,17 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
               />
             </Col>
           </Row>
+
+          {!running && tokens?.total ? (
+            <div className="stat-foot" style={{ marginTop: -4 }}>
+              上次构建消耗 {fmtNum(tokens.total)} token（输入 {fmtNum(tokens.prompt)} / 输出{' '}
+              {fmtNum(tokens.completion)}），耗时 {job?.stats?.duration_sec ?? '-'} 秒，
+              共 {job?.stats?.llm_calls ?? '-'} 次调用
+              {job?.stats?.llm_calls_without_usage
+                ? ` · ${job.stats.llm_calls_without_usage} 次未返回 usage`
+                : ''}
+            </div>
+          ) : null}
 
           {/* Semi 的 Row 不转发 ref，测高度得靠外面这层 div */}
           <div ref={paneRowRef}>

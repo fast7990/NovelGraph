@@ -284,6 +284,7 @@ async def extract_chunk(
     chapter_no: int = 0,
     chapter_title: str = "",
     known_names: list[str] | None = None,
+    usage_tag: str | None = None,
 ) -> ChunkExtraction:
     """抽一块。LLM 失败时返回空结果而不是抛错——图谱是增强项，
     一块抽不出来不该让整本书的图谱构建失败。"""
@@ -305,7 +306,9 @@ async def extract_chunk(
     # LLM_MODEL_FAST 未配置时退回主模型，并在结果为空时给出明确告警。
     model = llm.fast_model
     try:
-        raw = await llm.complete_json(messages, temperature=0.0, max_tokens=4500, model=model)
+        raw = await llm.complete_json(
+            messages, temperature=0.0, max_tokens=4500, model=model, usage_tag=usage_tag
+        )
     except Exception:  # noqa: BLE001
         logger.warning("图谱抽取失败 chapter=%s len=%s", chapter_no, len(text), exc_info=True)
         return ChunkExtraction(stats={"llm_error": 1})
@@ -327,6 +330,7 @@ async def extract_chunk(
                 temperature=0.0,
                 max_tokens=4500,
                 model=model,
+                usage_tag=usage_tag,
             )
         except Exception:  # noqa: BLE001
             logger.warning("图谱抽取重试失败 chapter=%s", chapter_no, exc_info=True)
