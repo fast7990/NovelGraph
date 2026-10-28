@@ -185,6 +185,62 @@ body {
   margin-top: 10px; padding-top: 10px;
   border-top: 1px dashed var(--semi-color-border);
 }
+
+/* ---------- 思考过程 ---------- */
+/* Semi 的 .semi-chat-chatBox-wrap 是 align-items:flex-start 的列 flex，
+   子元素默认收缩到内容宽度；思考面板/引用条得显式撑满，否则窄成一条 */
+.msg-body { align-self: stretch; width: 100%; min-width: 0; }
+
+.think {
+  margin: 2px 0 10px;
+  border: 1px solid var(--semi-color-border);
+  border-radius: var(--semi-border-radius-medium);
+  background: var(--semi-color-fill-0);
+  overflow: hidden;
+}
+.think-head {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 7px 10px;
+  border: none; background: transparent; cursor: pointer;
+  font-size: 12.5px; color: var(--semi-color-text-1); text-align: left;
+}
+.think-head:hover { background: var(--semi-color-fill-1); }
+.think-caret { display: inline-flex; color: var(--semi-color-text-2); }
+.think-title { font-weight: 500; }
+.think-meta {
+  margin-left: auto; color: var(--semi-color-text-2);
+  font-variant-numeric: tabular-nums; font-size: 11.5px;
+}
+.think-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--semi-color-primary);
+  animation: think-pulse 1.1s ease-in-out infinite;
+}
+@keyframes think-pulse {
+  0%, 100% { opacity: 0.25; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+.think-body {
+  max-height: 260px; overflow: auto;
+  padding: 0 10px 9px 26px;
+  border-top: 1px solid var(--semi-color-border);
+  padding-top: 8px;
+}
+.think-facts { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 7px; }
+.think-facts .fact {
+  font-size: 11px; padding: 0 6px; line-height: 17px;
+  border-radius: 4px;
+  color: var(--semi-color-text-2);
+  background: var(--semi-color-fill-1);
+}
+.think-facts .fact.ok { color: var(--semi-color-success); background: var(--semi-color-success-light-default); }
+.think-facts .fact.warn { color: var(--semi-color-warning); background: var(--semi-color-warning-light-default); }
+.think-text {
+  white-space: pre-wrap; word-break: break-word;
+  font-size: 12.5px; line-height: 1.75;
+  color: var(--semi-color-text-1);
+}
+.think-skeleton { font-size: 12.5px; color: var(--semi-color-text-2); }
 .cite-chip {
   cursor: pointer; user-select: none;
   border: 1px solid var(--semi-color-border);

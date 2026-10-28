@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.8</div>
+  <div class="eyebrow">Technical Architecture · v1.9</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -395,14 +395,14 @@
         <h3>问答链路（P95 首字 &lt; 2 s）</h3>
       </div>
       <ol class="steps">
-        <li data-n="1"><b>Query 改写</b>glm-5 做指代消解 + 关键词/实体抽取 → <code>standalone_query</code></li>
+        <li data-n="1"><b>问题入参</b>原始问题直接检索（指代消解/改写尚未做，留 P2；多轮追问靠历史消息来兜）</li>
         <li data-n="2"><b>并行召回</b>稠密 HNSW（<code>iterative_scan</code>，filter <code>novel_id</code>，limit 50）∥ 词法 <code>tsquery</code>（limit 50）</li>
         <li data-n="3"><b>图谱事实</b>问题点名实体（名字/别名子串命中）→ 一跳关系 ≤6 个实体 → 文本化注入；查不到就跳过，不阻塞</li>
         <li data-n="4"><b>RRF 融合</b><code>Σ 1/(60+rank)</code>，对分值尺度不敏感，换模型不用调参</li>
         <li data-n="5"><b>精排</b>bge-reranker-base int8，top50 → top24（约 80 ms）</li>
         <li data-n="6"><b>回溯父块</b>child 命中 → 按 parent 去重取 8 个，控制在 8K token 内</li>
         <li data-n="7"><b>Prompt 组装</b>固定前缀（字节稳定）+ 图谱事实 + 资料 + 历史，总预算 ≤ 8K</li>
-        <li data-n="8"><b>流式生成</b>SSE 推 delta → citations → done；断连立即释放上游连接</li>
+        <li data-n="8"><b>流式生成</b>SSE 先推 <code>meta</code>（引用+检索计数）→ <code>reasoning</code>（思考增量，首字前不黑屏）→ <code>delta</code> → <code>done</code>；断连立即释放上游连接</li>
       </ol>
     </div>
   </div>
@@ -755,7 +755,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.8</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.9</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

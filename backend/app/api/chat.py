@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import desc, select
 
+from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatMessage, ChatSession, Novel
 from app.schemas import ChatRequest
@@ -42,8 +44,15 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     )
     citations = [c.to_dict() for c in result.citations]
     llm = get_llm()
+    show_reasoning = settings.llm_show_reasoning
 
     async def gen():
+        t0 = time.perf_counter()
+
+        def elapsed() -> int:
+            """距本轮生成开始的毫秒数（不含检索：gen() 是在 prepare 之后才进的）。"""
+            return int((time.perf_counter() - t0) * 1000)
+
         yield _sse(
             "meta",
             {
@@ -53,16 +62,34 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "mode": result.mode,
                 "retrieval": result.detail,
                 "graph_facts": graph_facts,
+                # 诊断用：关掉思考推送（LLM_SHOW_REASONING=false）时前端据此知道
+                # "不是模型没想，是没让你看"，排查时不用怀疑是链路丢了事件
+                "show_reasoning": show_reasoning,
             },
         )
         buffer: list[str] = []
+        reasoning_chars = 0
+        ttft_ms: int | None = None
+        reasoning_ms: int | None = None
         try:
-            async for delta in llm.stream(messages, temperature=0.6, max_tokens=4096):
+            async for kind, text in llm.stream_events(
+                messages, temperature=0.6, max_tokens=settings.chat_max_tokens
+            ):
                 if await request.is_disconnected():
                     logger.info("客户端断开，中止生成")
                     break
-                buffer.append(delta)
-                yield _sse("delta", {"text": delta})
+                if kind == "reasoning":
+                    reasoning_chars += len(text)
+                    if show_reasoning:
+                        # 事件里带 elapsed_ms：前端不用自己数秒，重连/慢网下也不会漂
+                        yield _sse("reasoning", {"text": text, "elapsed_ms": elapsed()})
+                    continue
+                if ttft_ms is None:
+                    ttft_ms = elapsed()
+                    if reasoning_chars:
+                        reasoning_ms = ttft_ms
+                buffer.append(text)
+                yield _sse("delta", {"text": text})
         except Exception as exc:  # noqa: BLE001
             logger.exception("生成失败")
             yield _sse("error", {"message": f"生成失败：{type(exc).__name__}: {exc}"})
@@ -71,7 +98,17 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         answer = "".join(buffer)
         if answer.strip():
             await rag.save_turn(session_id, req.question, answer, citations)
-        yield _sse("done", {"session_id": session_id, "chars": len(answer)})
+        yield _sse(
+            "done",
+            {
+                "session_id": session_id,
+                "chars": len(answer),
+                "reasoning_chars": reasoning_chars,
+                "reasoning_ms": reasoning_ms,
+                "ttft_ms": ttft_ms,
+                "elapsed_ms": elapsed(),
+            },
+        )
 
     return StreamingResponse(
         gen(),

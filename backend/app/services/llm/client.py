@@ -13,6 +13,10 @@
    解法是显式关掉思考：`extra_body={"thinking": {"type": "disabled"}}`，实测 4.9s → 1.6s，
    且 reasoning 长度归零。这个开关**必须探测**而不是硬写——换到不支持它的网关时
    会直接 400，那时要能退化成"放大 max_tokens 兜住思考开销"。
+
+   （补充：360 网关实测 `thinking_switch=False`，开关不被接受，glm-5 一直会思考。
+   于是问答侧干脆把思考增量也流给前端 —— 实测首思考 1.0s、首正文 14.9s，
+   中间那十几秒原本是纯空白。见 `stream_events()`。）
 """
 
 from __future__ import annotations
@@ -31,6 +35,24 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _JSON_FENCE = re.compile(r"^```(?:json)?\s*|\s*```$", re.M)
+
+# 各家网关给思考字段起的名字不统一：DeepSeek 官方与多数中转是 reasoning_content，
+# 也有网关叫 reasoning。openai SDK 对未知字段只塞进 model_extra、不设属性，
+# 所以下面两种访问方式都要试一遍（实测 360 网关走属性那条路）。
+_REASONING_KEYS = ("reasoning_content", "reasoning")
+
+
+def _delta_reasoning(delta: Any) -> str:
+    for key in _REASONING_KEYS:
+        val = getattr(delta, key, None)
+        if val:
+            return val
+    extra = getattr(delta, "model_extra", None) or {}
+    for key in _REASONING_KEYS:
+        val = extra.get(key)
+        if val:
+            return val
+    return ""
 
 
 class LLMClient:
@@ -193,7 +215,7 @@ class LLMClient:
         )
         return parse_json_loose(text)
 
-    async def stream(
+    async def stream_events(
         self,
         messages: list[dict],
         *,
@@ -203,7 +225,14 @@ class LLMClient:
         max_tokens: int = 4096,
         model: str | None = None,
         thinking: bool | None = None,
-    ) -> AsyncIterator[str]:
+        include_reasoning: bool = True,
+    ) -> AsyncIterator[tuple[str, str]]:
+        """流式增量的**完整**视图：yield `(kind, text)`，kind 为 reasoning / content。
+
+        单独留这个接口而不是给 `stream()` 加返回值，是因为两者语义不同：
+        抽取、摘要这类调用方只关心正文，多出来的思考通道反而要它们自己过滤；
+        问答则要拿思考过程去做"首字前的空窗期"提示。
+        """
         body = self._thinking_body(thinking)
         async with self._sem:
             stream = await self.client.chat.completions.create(
@@ -219,13 +248,37 @@ class LLMClient:
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
-                    # 只转发正文：reasoning_content 是模型的思考草稿，
-                    # 推给用户既没意义又会把答案淹没
-                    if delta and delta.content:
-                        yield delta.content
+                    if delta is None:
+                        continue
+                    if include_reasoning:
+                        reasoning = _delta_reasoning(delta)
+                        if reasoning:
+                            yield "reasoning", reasoning
+                    if delta.content:
+                        yield "content", delta.content
             finally:
                 # 客户端断开时必须关掉上游连接，否则继续计费
                 await stream.close()
+
+    async def stream(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float = 0.6,
+        max_tokens: int = 4096,
+        model: str | None = None,
+        thinking: bool | None = None,
+    ) -> AsyncIterator[str]:
+        """只要正文。思考过程被丢弃——需要它请用 `stream_events()`。"""
+        async for kind, text in self.stream_events(
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            model=model,
+            thinking=thinking,
+        ):
+            if kind == "content":
+                yield text
 
     async def health(self) -> dict:
         caps = await self.probe()

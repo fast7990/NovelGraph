@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # 且与正文共用 max_tokens —— 开着时一句问候要 5s、结构化抽取会被思考吃光预算。
     # RAG 的答案有上下文兜着，长推理收益有限，默认关。
     llm_thinking: bool = False
+    # 问答是否把模型的思考过程（reasoning_content）流给前端。关掉只是不推、不省 token ——
+    # glm-5 的 thinking 开关实测不起作用，模型照样想，只是前端看不到。
+    llm_show_reasoning: bool = True
 
     # ---- RAG ----
     chunk_parent_size: int = 1400
@@ -79,6 +82,9 @@ class Settings(BaseSettings):
     retrieve_top_k: int = 20
     context_parents: int = 8
     enable_chapter_summary: bool = False
+    # 问答正文的 max_tokens。推理模型的思考与正文共用这份预算（实测一次回答思考
+    # 就吃掉 800-2000 token），4096 在长回答上会不够，给到 6144。
+    chat_max_tokens: int = 6144
 
     # ---- 混合检索（P1-M6）----
     # 词法通道：SQLite FTS5 + 自建 bigram（中文两字词是 trigram 的死角，见 lexical.py）

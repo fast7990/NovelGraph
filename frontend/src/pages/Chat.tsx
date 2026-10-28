@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Avatar, Card, Chat, Empty, Resizable, Select, Tag, Typography } from '@douyinfe/semi-ui'
 import type { Message } from '@douyinfe/semi-ui/lib/es/chat/interface'
 import PageHead from '../components/PageHead'
+import ReasoningPanel from '../components/ReasoningPanel'
+import type { RetSummary, ThinkPhase } from '../components/ReasoningPanel'
 import { api, Citation, Novel, RetrievalMode, streamSSE } from '../api/client'
 
 // 检索模式徽标：让"这次是两路融合还是单路降级"一眼可见，排查时不用翻日志
@@ -51,6 +53,10 @@ export default function ChatPage({
   const [chats, setChats] = useState<Message[]>([])
   const [citeMap, setCiteMap] = useState<Record<string, Citation[]>>({})
   const [modeMap, setModeMap] = useState<Record<string, RetrievalMode>>({})
+  // 思考过程按消息 id 存：Semi 的 Message 对象会被它内部回写，不适合塞大数据。
+  // 流式增量先攒在闭包里每 90ms 刷一次，避免一个字一次 setState 把整棵树重绘。
+  const [thinkMap, setThinkMap] = useState<Record<string, { text: string; phase: ThinkPhase; ms?: number }>>({})
+  const [retMap, setRetMap] = useState<Record<string, RetSummary>>({})
   const [activeId, setActiveId] = useState('') // 右侧面板当前展示的引用所属消息
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sessionId, setSessionId] = useState('')
@@ -69,6 +75,8 @@ export default function ChatPage({
   useEffect(() => {
     setChats([])
     setCiteMap({})
+    setThinkMap({})
+    setRetMap({})
     setActiveId('')
     setSessionId('')
   }, [novelId])
@@ -87,6 +95,27 @@ export default function ChatPage({
       { id: aid, role: 'assistant', content: '', createAt: Date.now(), status: 'loading' as const },
     ])
 
+    // ---- 思考过程的流式缓冲 ----
+    // 从"点发送"就开始有反馈：先挂一个 retrieving 占位，meta 到了转 thinking
+    const think = { text: '', phase: 'retrieving' as ThinkPhase, ms: undefined as number | undefined }
+    let timer: number | null = null
+    const flush = () =>
+      setThinkMap((prev) => ({ ...prev, [aid]: { text: think.text, phase: think.phase, ms: think.ms } }))
+    const scheduleFlush = () => {
+      if (timer != null) return
+      timer = window.setTimeout(() => {
+        timer = null
+        flush()
+      }, 90)
+    }
+    const stopFlush = () => {
+      if (timer != null) {
+        window.clearTimeout(timer)
+        timer = null
+      }
+    }
+    flush()
+
     const ctrl = new AbortController()
     abortRef.current = ctrl
     try {
@@ -97,14 +126,44 @@ export default function ChatPage({
           if (event === 'meta') {
             setCiteMap((prev) => ({ ...prev, [aid]: data.citations || [] }))
             setModeMap((prev) => ({ ...prev, [aid]: (data.mode || 'hybrid') as RetrievalMode }))
+            setRetMap((prev) => ({
+              ...prev,
+              [aid]: {
+                mode: data.mode || 'hybrid',
+                dense: data.retrieval?.dense,
+                lexical: data.retrieval?.lexical,
+                parents: data.retrieval?.parents,
+                reranked: data.retrieval?.reranked,
+                graphFacts: (data.graph_facts || []).length,
+                degraded: data.degraded,
+              },
+            }))
             setSessionId(data.session_id || '')
+            think.phase = 'thinking'
+            scheduleFlush()
+          } else if (event === 'reasoning') {
+            if (think.phase === 'retrieving') think.phase = 'thinking'
+            think.text += String(data.text || '')
+            scheduleFlush()
           } else if (event === 'delta') {
+            if (think.phase === 'thinking') {
+              // 正文一到就收合思考区，把版面让给答案
+              think.phase = 'answering'
+              stopFlush()
+              flush()
+            }
             setChats((prev) =>
               prev.map((m) =>
                 m.id === aid ? { ...m, content: String(m.content || '') + data.text } : m,
               ),
             )
+          } else if (event === 'done') {
+            think.phase = 'done'
+            think.ms = data.reasoning_ms ?? think.ms
           } else if (event === 'error') {
+            think.phase = 'done'
+            stopFlush()
+            flush()
             setChats((prev) =>
               prev.map((m) =>
                 m.id === aid
@@ -134,7 +193,11 @@ export default function ChatPage({
             : m,
         ),
       )
+      // 中途停止/出错：思考区定版，别一直转圈
+      think.phase = 'done'
     } finally {
+      stopFlush()
+      flush()
       setLoading(false)
       abortRef.current = null
     }
@@ -147,7 +210,7 @@ export default function ChatPage({
     <>
       <PageHead
         title="问答"
-        desc="混合检索（P0 为稠密召回）→ 回溯父块 → 拼装上下文 → 流式生成，答案带原文引用。"
+        desc="混合检索 + 图谱关系 → 回溯父块 → 流式生成；思考过程实时展开，答案带原文引用。"
         extra={
           <Select
             value={novelId || undefined}
@@ -189,31 +252,47 @@ export default function ChatPage({
               onClear={() => {
                 setSessionId('')
                 setCiteMap({})
+                setThinkMap({})
+                setRetMap({})
                 setChats([])
               }}
               chatBoxRenderConfig={{
                 renderChatBoxContent: ({ message, defaultContent }) => {
-                  const cs = message?.id ? citeMap[message.id] : undefined
-                  if (message?.role !== 'assistant' || !cs?.length) return defaultContent
+                  const mid = String(message?.id || '')
+                  const think = mid ? thinkMap[mid] : undefined
+                  const panel = think ? (
+                    <ReasoningPanel
+                      text={think.text}
+                      phase={think.phase}
+                      ms={think.ms}
+                      retrieval={retMap[mid]}
+                    />
+                  ) : null
+                  const cs = mid ? citeMap[mid] : undefined
+                  if (message?.role !== 'assistant') return defaultContent
+                  if (!panel && !cs?.length) return defaultContent
                   return (
-                    <div>
+                    <div className="msg-body">
+                      {panel}
                       {defaultContent}
-                      <div className="cite-chips">
-                        {cs.map((c, i) => (
-                          <span
-                            key={c.chunk_id}
-                            className={`cite-chip ${
-                              activeId === message.id && activeIdx === i ? 'active' : ''
-                            }`}
-                            onClick={() => {
-                              setActiveId(String(message.id))
-                              setActiveIdx(i)
-                            }}
-                          >
-                            资料 {i + 1} · 第 {c.chapter_no} 章
-                          </span>
-                        ))}
-                      </div>
+                      {cs && cs.length > 0 && (
+                        <div className="cite-chips">
+                          {cs.map((c, i) => (
+                            <span
+                              key={c.chunk_id}
+                              className={`cite-chip ${
+                                activeId === message.id && activeIdx === i ? 'active' : ''
+                              }`}
+                              onClick={() => {
+                                setActiveId(String(message.id))
+                                setActiveIdx(i)
+                              }}
+                            >
+                              资料 {i + 1} · 第 {c.chapter_no} 章
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )
                 },
