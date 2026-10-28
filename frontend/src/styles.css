@@ -29,6 +29,15 @@ body {
   background: var(--semi-color-bg-1);
 }
 
+/*
+ * 关键：纵向 flex 容器里的直接子元素默认 flex-shrink:1。
+ * 页面返回的是 fragment，每个卡片都是一个 flex item，
+ * 内容超过屏幕时它们会被"挤扁"到几像素，看起来就是内容被裁掉、卡片里冒出滚动条。
+ * 统一禁止收缩：子元素保持自然高度，由 .app-content 负责滚动。
+ * 需要撑满整屏的页面（.chat-page）在自己的规则里显式 flex:1 覆盖。
+ */
+.app-content > * { flex: 0 0 auto; }
+
 .brand {
   display: flex;
   align-items: center;

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   Banner,
   Button,
@@ -58,7 +58,8 @@ function Stat({ label, value, foot }: { label: string; value: React.ReactNode; f
 
 export default function DebugSearch({ novelId, onPick }: { novelId: string; onPick: (id: string) => void }) {
   const [novels, setNovels] = useState<Novel[]>([])
-  const [q, setQ] = useState('')
+  // 支持 ?q=xxx 进页面直接跑一次检索——排查时把链接发出去就能复现同一次召回
+  const [q, setQ] = useState(() => new URLSearchParams(window.location.search).get('q') || '')
   const [topK, setTopK] = useState(8)
   const [res, setRes] = useState<any>(null)
   const [err, setErr] = useState('')
@@ -86,9 +87,16 @@ export default function DebugSearch({ novelId, onPick }: { novelId: string; onPi
     }
   }
 
+  // ?q= 带进来的查询等 novelId 就绪后自动跑一次，只跑一次
+  const autoRan = useRef(false)
+  useEffect(() => {
+    if (autoRan.current || !novelId || !q.trim()) return
+    autoRan.current = true
+    void run()
+  }, [novelId, q])
+
   const d = res?.detail || {}
   const items: Item[] = res?.items || []
-
   return (
     <>
       <PageHead

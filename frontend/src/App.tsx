@@ -51,7 +51,10 @@ const readHash = (): Tab => {
 export default function App() {
   const [tab, setTab] = useState<Tab>(readHash)
   const [status, setStatus] = useState<string>('checking')
-  const [novelId, setNovelId] = useState<string>('')
+  // 支持 ?novel=nv_xxx 直接定位到某本书，便于排查问题与分享链接
+  const [novelId, setNovelId] = useState<string>(
+    () => new URLSearchParams(window.location.search).get('novel') || '',
+  )
 
   useEffect(() => {
     const onHash = () => setTab(readHash())

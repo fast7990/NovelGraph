@@ -56,7 +56,7 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
     <>
       <PageHead
         title="概览"
-        desc="P0 闭环：上传 → 解析切块 → 本地向量化 → pgvector 写入 → 混合检索 → RAG 问答。知识图谱在 P1 接入。"
+        desc="上传 → 解析切块 → 本地向量化 → pgvector 写入 → 混合检索（稠密 + 词法 + RRF + 精排）→ 知识图谱增强问答。正文、向量、倒排、图谱四类数据同库。"
         extra={
           <>
             <Button onClick={() => onGo('chunks')}>切片完成度</Button>
@@ -199,7 +199,8 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
         }
       >
         <Typography.Paragraph type="tertiary" style={{ marginBottom: 12 }}>
-          P1 计划：Neo4j 图谱抽取与写入、BM25 + RRF 混合检索、reranker 精排、图谱可视化、向量空间投影视图。
+          P1 已上线：PG 三表知识图谱（递归 CTE 查 N 跳）、稠密 + 词法双路召回与 RRF 融合、bge-reranker 精排、
+          力导向图谱可视化、任务中心（取消 / 重试）。P2 待做：UMAP 向量散点、图谱时间线、实体合并审核台。
         </Typography.Paragraph>
         <div className="row">
           <Tag color="blue" type="light">
@@ -210,6 +211,9 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
           </Tag>
           <Tag color="cyan" type="light">
             SSE 流式生成
+          </Tag>
+          <Tag color="green" type="light">
+            知识图谱增强
           </Tag>
           <Tag color="grey" type="light">
             CPU 8 核 · 1024 维
