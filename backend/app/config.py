@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     # 未指定实体聚焦时，子图默认返回的最大节点/边数（防止前端被大图拖死）
     graph_subgraph_max_nodes: int = 200
     graph_subgraph_max_edges: int = 400
+    # 实体详情返回的关系条数上限。曹操全书 343 条，200 会截掉三分之一，
+    # 前端还无从判断是不是截过，所以放宽到 500 并单独返回总数
+    graph_entity_relations: int = 500
     # RAG 图谱增强：注入 prompt 的关系条数上限
     graph_rag_max_facts: int = 40
 

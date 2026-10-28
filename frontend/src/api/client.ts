@@ -252,6 +252,8 @@ export type GraphEntityDetail = GraphEntity & {
     chapter_no: number
     chunk_id: string | null
   }[]
+  /** 该实体的关系总数。可能大于 relations.length（后端有条数上限） */
+  relation_total: number
   chapters: { chapter_no: number; count: number }[]
 }
 

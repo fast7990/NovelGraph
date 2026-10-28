@@ -36,6 +36,7 @@ HISTORY_TURNS = 6
 
 
 async def _history(session_id: str) -> list[dict]:
+    """获取会话历史记录"""
     async with SessionLocal() as db:
         rows = (
             await db.execute(

@@ -135,12 +135,22 @@ async def get_entity(db: AsyncSession, novel_id: str, entity_id: str) -> dict | 
         return None
 
     # 出入边一次查完，再用一次查询把对端名字补上（避免 N+1）
+    rel_cond = or_(Relation.src_id == entity_id, Relation.dst_id == entity_id)
+    # 总数单独查：曹操 343 条、刘备 277 条，原来 limit 200 是静默截断，
+    # 前端拿不到总数只能显示"关系 200"，看着像全部，其实是截掉的三分之一。
+    rel_total = (
+        await db.execute(
+            select(func.count()).select_from(Relation).where(Relation.novel_id == novel_id, rel_cond)
+        )
+    ).scalar() or 0
     rels = (
         await db.execute(
             select(Relation)
-            .where(Relation.novel_id == novel_id, or_(Relation.src_id == entity_id, Relation.dst_id == entity_id))
-            .order_by(Relation.status, Relation.confidence.desc())
-            .limit(200)
+            .where(Relation.novel_id == novel_id, rel_cond)
+            # 已确认在前，同状态按置信度降序；再按 id 兜底，
+            # 否则同分记录在两次查询里顺序可能不同
+            .order_by(Relation.status, Relation.confidence.desc(), Relation.id)
+            .limit(settings.graph_entity_relations)
         )
     ).scalars().all()
 
@@ -178,6 +188,7 @@ async def get_entity(db: AsyncSession, novel_id: str, entity_id: str) -> dict | 
             }
             for r in rels
         ],
+        "relation_total": int(rel_total),
         "chapters": [{"chapter_no": int(no), "count": int(n or 0)} for no, n in chapters],
     }
 

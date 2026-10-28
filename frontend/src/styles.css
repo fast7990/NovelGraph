@@ -142,7 +142,7 @@ body {
 .chat-page { display: flex; gap: 16px; flex: 1; min-height: 0; }
 
 .chat-main {
-  flex: 1; min-width: 0; display: flex;
+  flex: 1 0 auto; min-width: 0; display: flex;
   background: var(--semi-color-bg-0);
   border: 1px solid var(--semi-color-border);
   border-radius: var(--semi-border-radius-large);
@@ -312,8 +312,20 @@ body {
 .entity-item .name { flex: 1; min-width: 0; }
 .entity-item .cnt { color: var(--semi-color-text-3); font-size: 11px; }
 
-.detail { height: 100%; overflow: auto; padding-bottom: 12px; }
-.detail-head { padding: 14px 14px 8px; }
+/*
+ * 详情面板必须自己滚。
+ * 之前写的是 height:100% + overflow:auto，但卡片 body 的高度是 auto，
+ * 百分比高度解析不出来 → 面板高度等于内容高度，overflow 形同虚设，
+ * 200 条关系全被卡片裁掉（刘备只露到第 7 条）。
+ * 改成 flex 子项 + min-height:0，让它在固定高度的卡片里占满剩余空间并滚动。
+ */
+.detail { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; padding-bottom: 12px; }
+/* 名字行吸顶：滚到关系深处还知道在看谁 */
+.detail-head {
+  padding: 14px 14px 8px;
+  position: sticky; top: 0; z-index: 2;
+  background: var(--semi-color-bg-2, var(--semi-color-bg-0));
+}
 .detail-sec {
   padding: 10px 14px 4px;
   font-size: 11.5px;
@@ -328,10 +340,22 @@ body {
   cursor: pointer;
 }
 .rel-item:hover { background: var(--semi-color-fill-0); }
+/* 端名要能压缩，否则长名字会把右侧的关系标签顶掉 */
+.rel-item .row-between > .ellipsis { flex: 1; min-width: 0; }
+.rel-item .row-between > .semi-tag { flex: 0 0 auto; }
+/*
+ * 证据原文给两行。原先单行 ellipsis 在窄面板里基本等于看不到内容，
+ * 但全展开会让 200 条关系长得没法翻，两行是折中。
+ */
 .rel-ev {
   font-size: 11px;
   color: var(--semi-color-text-3);
   margin-top: 2px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
 }
 
 .chap-strip { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 14px 12px; }

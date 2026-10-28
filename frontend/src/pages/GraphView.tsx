@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   Banner,
   Button,
@@ -28,6 +28,9 @@ import {
 } from '../api/client'
 
 const TYPES = ['Character', 'Faction', 'Location', 'Item', 'Event', 'Concept']
+
+/** 关系列表一次渲染多少条。刘备 277 条关系，全铺开既卡又难翻 */
+const REL_PAGE = 20
 
 function Stat({ label, value, foot }: { label: string; value: React.ReactNode; foot?: React.ReactNode }) {
   return (
@@ -68,6 +71,39 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
   const [busy, setBusy] = useState(false)
   const [subLoading, setSubLoading] = useState(false)
   const [tick, setTick] = useState(0)
+  const [relLimit, setRelLimit] = useState(REL_PAGE)
+  const detailRef = useRef<HTMLDivElement | null>(null)
+  const paneRowRef = useRef<HTMLDivElement | null>(null)
+
+  /*
+   * 三栏高度按"还剩多少地方"算，不再写死 620。
+   * 写死的问题在 1080×620 这种窗口上直接暴露：620 的卡片超出可视区，
+   * 而卡片内部又不滚动，右栏 277 条关系只露到第 7 条就被硬切。
+   *
+   * 用相对 .app-content 的偏移量算，而不是 getBoundingClientRect().top：
+   * 后者随页面滚动变化，滚一下高度就变一次。
+   */
+  const [paneH, setPaneH] = useState(560)
+  useLayoutEffect(() => {
+    const calc = () => {
+      const el = paneRowRef.current
+      const box = el?.closest('.app-content') as HTMLElement | null
+      if (!el || !box) return
+      const top =
+        el.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop
+      // 图例在卡片外面，窄窗口下会折成两行，高度不是常数。
+      // 写死一个估算值，要么留白过多，要么整行顶出可视区多出一条滚动条。
+      const legend = el.querySelector('.graph-legend') as HTMLElement | null
+      const legendH = legend ? legend.getBoundingClientRect().height + 10 : 40
+      // 28 = .app-content 的 padding-bottom
+      // 300 是画布的可读下限；再小就只剩一团点了。宁可图小一点也不让页面长滚动条
+      setPaneH(Math.max(300, Math.min(820, box.clientHeight - top - 28 - legendH)))
+    }
+    calc()
+    window.addEventListener('resize', calc)
+    return () => window.removeEventListener('resize', calc)
+    // 进度 Banner 和统计卡出现/消失会改变三栏的起始位置，得重算
+  }, [ov, status, err])
 
   useEffect(() => {
     api
@@ -174,6 +210,12 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
     return m
   }, [sub])
 
+  // 换实体：关系列表回到前 20 条，面板滚回顶部（否则新实体继承上一个人的滚动位置）
+  useEffect(() => {
+    setRelLimit(REL_PAGE)
+    detailRef.current?.scrollTo({ top: 0 })
+  }, [detail?.id])
+
   const typeOptions = useMemo(
     () =>
       TYPES.map((t) => ({
@@ -267,12 +309,25 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
             </Col>
           </Row>
 
-          <Row gutter={12}>
-            {/* 左：实体列表 */}
+          {/* Semi 的 Row 不转发 ref，测高度得靠外面这层 div */}
+          <div ref={paneRowRef}>
+            <Row gutter={12}>
+              {/* 左：实体列表 */}
             <Col span={5}>
               <Card
-                bodyStyle={{ padding: 12, display: 'flex', flexDirection: 'column', height: '100%' }}
-                style={{ height: 620 }}
+                bodyStyle={{
+                  padding: 12,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  flex: 1,
+                  minHeight: 0,
+                }}
+                /*
+                 * 卡片本身必须是 flex 容器，body 的 flex:1 才生效。
+                 * 只给 body 写 height:100% 在 height:auto 的 body 上解析不出来，
+                 * 这正是右栏关系列表不滚、被卡片裁掉的原因。
+                 */
+                style={{ height: paneH, display: 'flex', flexDirection: 'column' }}
               >
                 <Input
                   prefix={<IconSearch />}
@@ -310,8 +365,8 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
             {/* 中：画布 */}
             <Col span={12}>
               <Card
-                bodyStyle={{ padding: 0 }}
-                style={{ height: 620 }}
+                bodyStyle={{ padding: 0, flex: 1, minHeight: 0, overflow: 'hidden' }}
+                style={{ height: paneH, display: 'flex', flexDirection: 'column' }}
                 title={
                   <div className="row" style={{ gap: 10 }}>
                     <span style={{ fontSize: 13 }}>{selected ? '邻域视图' : '全书主图'}</span>
@@ -345,7 +400,7 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
                       edges={sub.edges}
                       selected={selected}
                       onSelect={setSelected}
-                      height={560}
+                      height={paneH - 60}
                       showPending={showPending}
                     />
                   ) : (
@@ -369,9 +424,12 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
 
             {/* 右：详情 */}
             <Col span={7}>
-              <Card bodyStyle={{ padding: 0 }} style={{ height: 620 }}>
+              <Card
+                bodyStyle={{ padding: 0, display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}
+                style={{ height: paneH, display: 'flex', flexDirection: 'column' }}
+              >
                 {detail ? (
-                  <div className="detail">
+                  <div className="detail" ref={detailRef}>
                     <div className="detail-head">
                       <div>
                         <div style={{ fontSize: 17, fontWeight: 600 }}>{detail.name}</div>
@@ -396,9 +454,16 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
                         {detail.desc}
                       </Typography.Paragraph>
                     )}
-                    <div className="detail-sec">关系 {detail.relations.length}</div>
+                    <div className="detail-sec">
+                      关系 {detail.relation_total}
+                      {detail.relation_total > detail.relations.length && (
+                        <span className="stat-foot" style={{ fontWeight: 400, marginLeft: 6 }}>
+                          仅列出前 {detail.relations.length} 条
+                        </span>
+                      )}
+                    </div>
                     <div className="rel-list">
-                      {detail.relations.map((r) => (
+                      {detail.relations.slice(0, relLimit).map((r) => (
                         <div
                           key={r.id}
                           className="rel-item"
@@ -414,12 +479,31 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
                               {r.relation}
                             </Tag>
                           </div>
-                          <div className="rel-ev ellipsis">{r.evidence || '（无证据）'}</div>
+                          <div className="rel-ev">{r.evidence || '（无证据）'}</div>
                         </div>
                       ))}
                       {!detail.relations.length && (
                         <div className="stat-foot" style={{ padding: '4px 14px' }}>
                           这个实体没有已确认的关系（可能全被判为待确认）
+                        </div>
+                      )}
+                      {detail.relations.length > relLimit && (
+                        <div style={{ padding: '4px 6px 8px' }}>
+                          <Button
+                            size="small"
+                            theme="borderless"
+                            onClick={() => setRelLimit((n) => n + REL_PAGE * 2)}
+                          >
+                            显示更多（{Math.min(relLimit, detail.relations.length)} /{' '}
+                            {detail.relations.length}）
+                          </Button>
+                          <Button
+                            size="small"
+                            theme="borderless"
+                            onClick={() => setRelLimit(detail.relations.length)}
+                          >
+                            全部展开
+                          </Button>
                         </div>
                       )}
                     </div>
@@ -442,7 +526,7 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
                     )}
                   </div>
                 ) : (
-                  <div style={{ padding: 40 }}>
+                  <div style={{ padding: 40, flex: 1, minHeight: 0, overflow: 'auto' }}>
                     <Empty
                       title="选一个实体"
                       description={
@@ -469,6 +553,7 @@ export default function GraphView({ novelId, onPick }: { novelId: string; onPick
               </Card>
             </Col>
           </Row>
+          </div>
         </>
       )}
       {nodeIndex.size === 0 && hasGraph && <div style={{ display: 'none' }} />}

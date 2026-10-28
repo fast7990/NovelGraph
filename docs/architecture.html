@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.10</div>
+  <div class="eyebrow">Technical Architecture · v1.11</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -580,7 +580,7 @@
       </div>
       <div>
         <div style="font-weight:600;color:var(--ink);margin-bottom:4px">右栏 · 详情</div>
-        实体描述与别名 · 该实体的全部关系 · 每条关系带章节号与证据原文（点「定位」跳到对应块）· 出现章节时间线
+        实体描述与别名 · 关系按证据强度排序、默认 20 条可展开（<b>面板自身滚动</b>，不再被卡片裁掉）· 每条关系带证据原文与方向箭头 · 出现章节时间线；高度按视口剩余空间算，小窗口下不再顶出可视区
       </div>
     </div>
   </div>
@@ -755,7 +755,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.10</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.11</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 
