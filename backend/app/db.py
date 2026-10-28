@@ -90,3 +90,18 @@ async def init_db() -> None:
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        await _apply_patches(conn)
+
+
+# 生成式建表不会给**已存在**的表补列，而项目还没上 alembic。
+# 这里用幂等 DDL 兜底：新装的环境 create_all 已建好，老库执行一次 ALTER 就对齐。
+# 上 alembic 之后删掉本段，改为版本化迁移。
+_COLUMN_PATCHES = (
+    # P1-M5：任务分种类，"图谱构建"和"入库"共用一个表但队列处理方式不同
+    "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'ingest'",
+)
+
+
+async def _apply_patches(conn) -> None:  # noqa: ANN001
+    for sql in _COLUMN_PATCHES:
+        await conn.execute(text(sql))

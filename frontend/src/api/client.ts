@@ -145,6 +145,134 @@ export const api = {
 
   vectorSample: (novelId: string, limit = 400) =>
     fetch(`${BASE}/novels/${novelId}/vectors/sample?limit=${limit}`).then((r) => j<any>(r)),
+
+  // ---- 图谱（P1-M5）----
+  graphOverview: (novelId: string) =>
+    fetch(`${BASE}/graph/overview?novel_id=${novelId}`).then((r) => j<GraphOverview>(r)),
+  graphEntities: (
+    novelId: string,
+    params: { q?: string; type?: string; page?: number; page_size?: number; order?: string } = {},
+  ) => {
+    const p = new URLSearchParams({ novel_id: novelId })
+    if (params.q) p.set('q', params.q)
+    if (params.type) p.set('type', params.type)
+    if (params.order) p.set('order', params.order)
+    p.set('page', String(params.page || 1))
+    p.set('page_size', String(params.page_size || 30))
+    return fetch(`${BASE}/graph/entities?${p}`).then((r) => j<{ items: GraphEntity[]; total: number }>(r))
+  },
+  graphEntity: (novelId: string, id: string) =>
+    fetch(`${BASE}/graph/entities/${id}?novel_id=${novelId}`).then((r) => j<GraphEntityDetail>(r)),
+  graphSubgraph: (novelId: string, params: { center?: string; hops?: number; include_pending?: boolean } = {}) => {
+    const p = new URLSearchParams({ novel_id: novelId })
+    if (params.center) p.set('center', params.center)
+    if (params.hops) p.set('hops', String(params.hops))
+    if (params.include_pending) p.set('include_pending', 'true')
+    return fetch(`${BASE}/graph/subgraph?${p}`).then((r) => j<GraphSubgraph>(r))
+  },
+  graphRelations: (novelId: string, params: { status?: string; page?: number; page_size?: number } = {}) => {
+    const p = new URLSearchParams({ novel_id: novelId })
+    if (params.status) p.set('status', params.status)
+    p.set('page', String(params.page || 1))
+    p.set('page_size', String(params.page_size || 30))
+    return fetch(`${BASE}/graph/relations?${p}`).then((r) => j<{ items: GraphRelationRow[]; total: number }>(r))
+  },
+  graphStatus: (novelId: string) =>
+    fetch(`${BASE}/graph/status?novel_id=${novelId}`).then((r) => j<GraphStatus>(r)),
+  graphBuild: (novelId: string, force = false) =>
+    fetch(`${BASE}/graph/build?novel_id=${novelId}&force=${force}`, { method: 'POST' }).then((r) =>
+      j<{ job_id: string | null; reused: boolean; message: string }>(r),
+    ),
+}
+
+export type GraphEntity = {
+  id: string
+  name: string
+  type: string
+  importance: number
+  mention_count: number
+  first_chapter: number
+  desc: string
+  aliases: string[]
+}
+
+export type GraphEdgeLine = {
+  id: string
+  src: string
+  dst: string
+  relation: string
+  strength: number
+  confidence: number
+  status: string
+  chapter_no: number
+}
+
+export type GraphSubgraph = {
+  nodes: GraphEntity[]
+  edges: GraphEdgeLine[]
+  center: string | null
+  truncated: boolean
+  node_total: number
+}
+
+export type GraphOverview = {
+  entities: number
+  relations: number
+  pending_relations: number
+  mentions: number
+  by_type: { type: string; count: number; mentions: number }[]
+  by_relation: { relation: string; count: number }[]
+  top_entities: GraphEntity[]
+}
+
+export type GraphEntityDetail = GraphEntity & {
+  relations: {
+    id: string
+    direction: 'in' | 'out'
+    other_id: string
+    other_name: string
+    relation: string
+    raw_relation: string
+    strength: number
+    confidence: number
+    status: string
+    evidence: string
+    chapter_no: number
+    chunk_id: string | null
+  }[]
+  chapters: { chapter_no: number; count: number }[]
+}
+
+export type GraphRelationRow = {
+  id: string
+  src_id: string
+  src_name: string
+  dst_id: string
+  dst_name: string
+  relation: string
+  raw_relation: string
+  strength: number
+  confidence: number
+  status: string
+  evidence: string
+  chapter_no: number
+  chunk_id: string | null
+}
+
+export type GraphStatus = {
+  has_graph: boolean
+  built: { entities: number; relations: number; built_at: string } | null
+  job: {
+    id: string
+    status: string
+    stage: string
+    progress: number
+    chapters_done: number
+    chapters_total: number
+    error: string
+    stats: Record<string, any>
+    running: boolean
+  } | null
 }
 
 /** SSE over POST：EventSource 不支持 POST，只能手撸流解析。 */

@@ -41,3 +41,6 @@ Thumbs.db
 
 # 验证截图
 shots/
+
+# TypeScript 增量构建缓存
+*.tsbuildinfo

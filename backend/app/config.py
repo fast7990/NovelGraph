@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     llm_timeout: int = 120
     llm_max_concurrency: int = 4
     llm_json_mode: str = "auto"
+    # 是否让模型"思考"。`z-ai/glm-5` 是推理模型，思考内容走 reasoning_content
+    # 且与正文共用 max_tokens —— 开着时一句问候要 5s、结构化抽取会被思考吃光预算。
+    # RAG 的答案有上下文兜着，长推理收益有限，默认关。
+    llm_thinking: bool = False
 
     # ---- RAG ----
     chunk_parent_size: int = 1400
@@ -94,6 +98,19 @@ class Settings(BaseSettings):
     rerank_max_length: int = 512
     rerank_threads: int = 8
     rerank_cache_dir: str = "./data/models"
+
+    # ---- 知识图谱（P1-M5）----
+    graph_enabled: bool = True
+    # 章级并发。glm-5 每次调用 2-4s，章内必须串行（保守称谓累积），
+    # 章间并发到 3-4 就能把一本 120 章的书压到十分钟内；再高会撞网关限流
+    graph_concurrency: int = 3
+    # 低于该置信度的关系标 pending 进人工审核，不直接进可视化主图
+    graph_confidence_active: float = 0.6
+    # 未指定实体聚焦时，子图默认返回的最大节点/边数（防止前端被大图拖死）
+    graph_subgraph_max_nodes: int = 200
+    graph_subgraph_max_edges: int = 400
+    # RAG 图谱增强：注入 prompt 的关系条数上限
+    graph_rag_max_facts: int = 40
 
     @field_validator("database_url", mode="before")
     @classmethod

@@ -102,6 +102,8 @@ class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
     top_k: int | None = None
+    # 是否把命中实体的一跳关系注入 prompt（图谱未建时自动无效果）
+    use_graph: bool = True
 
 
 class SearchRequest(BaseModel):

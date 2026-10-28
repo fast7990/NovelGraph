@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Layout, Nav } from '@douyinfe/semi-ui'
 import {
+  IconApartment,
   IconComment,
   IconHome,
   IconLayers,
@@ -12,15 +13,17 @@ import Upload from './pages/Upload'
 import ChunkReview from './pages/ChunkReview'
 import Chat from './pages/Chat'
 import VectorView from './pages/VectorView'
+import GraphView from './pages/GraphView'
 import { api } from './api/client'
 
-type Tab = 'overview' | 'upload' | 'chunks' | 'vector' | 'chat'
+type Tab = 'overview' | 'upload' | 'chunks' | 'vector' | 'graph' | 'chat'
 
 const NAV = [
   { itemKey: 'overview', text: '概览', icon: <IconHome /> },
   { itemKey: 'upload', text: '数据上传', icon: <IconUpload /> },
   { itemKey: 'chunks', text: '切片完成度', icon: <IconSourceControl /> },
   { itemKey: 'vector', text: '向量库', icon: <IconLayers /> },
+  { itemKey: 'graph', text: '知识图谱', icon: <IconApartment /> },
   { itemKey: 'chat', text: '问答', icon: <IconComment /> },
 ]
 
@@ -32,7 +35,7 @@ const STATUS_COLOR: Record<string, string> = {
   checking: 'var(--semi-color-text-3)',
 }
 
-const TABS: Tab[] = ['overview', 'upload', 'chunks', 'vector', 'chat']
+const TABS: Tab[] = ['overview', 'upload', 'chunks', 'vector', 'graph', 'chat']
 
 const readHash = (): Tab => {
   const h = window.location.hash.replace('#', '') as Tab
@@ -106,6 +109,7 @@ export default function App() {
         {tab === 'upload' && <Upload onGo={go} />}
         {tab === 'chunks' && <ChunkReview novelId={novelId} onPick={setNovelId} />}
         {tab === 'vector' && <VectorView novelId={novelId} onPick={setNovelId} />}
+        {tab === 'graph' && <GraphView novelId={novelId} onPick={setNovelId} />}
         {tab === 'chat' && <Chat novelId={novelId} onPick={setNovelId} />}
       </Layout.Content>
     </Layout>

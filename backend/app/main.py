@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from app.api import chat, jobs, novels, system  # noqa: E402
+from app.api import chat, graph, jobs, novels, system  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import init_db  # noqa: E402
 from app.workers import runner  # noqa: E402
@@ -116,7 +116,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-for router in (novels.router, jobs.router, chat.router, system.router):
+for router in (novels.router, jobs.router, chat.router, graph.router, system.router):
     app.include_router(router, prefix=settings.api_prefix)
 
 

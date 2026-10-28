@@ -217,34 +217,33 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.6</div>
+  <div class="eyebrow">Technical Architecture · v1.7</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
-    原始文本 → 向量与倒排（PostgreSQL + pgvector）+ 知识图谱（Neo4j）→ 可视化中台 + 大模型增强问答。
-    写入异步可重跑，查询同步可降级，正文、向量、词法索引同库同事务。
+    原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
+    写入异步可重跑，查询同步可降级，正文、向量、词法索引、图谱同库同事务。
   </p>
   <div class="meta">
-    <span class="chip"><b>PostgreSQL</b> 18.6 + pgvector 0.8.7 · 本机</span>
-    <span class="chip"><b>Neo4j</b> 5.x（P1）</span>
-    <span class="chip"><b>大模型</b> 360 网关 · z-ai/glm-5</span>
+    <span class="chip"><b>PostgreSQL</b> 18.6 + pgvector 0.8.7 · 单库承载正文/向量/倒排/图谱</span>
+    <span class="chip"><b>大模型</b> 360 网关 · glm-5（问答）+ deepseek-chat-v3（抽取）</span>
     <span class="chip"><b>Embedding</b> 本地 int8 · bge-large-zh · 1024 维 / 8 线程</span>
     <span class="chip"><b>后端</b> FastAPI + asyncio worker · uv</span>
-    <span class="chip"><b>前端</b> React + Semi Design · pnpm</span>
+    <span class="chip"><b>前端</b> React + Semi Design · 自研 SVG 力导向 · pnpm</span>
   </div>
 </header>
 
 <div class="notes">
   <div class="note ok">
     <h3>① 存储收敛到一个 PostgreSQL</h3>
-    <p>正文、元数据、向量、词法倒排同库：配置只有 <span class="k">DATABASE_URL</span>。派生表 <span class="k">chunk_vectors</span> / <span class="k">chunk_lexical</span> 对 <span class="k">chunks(id)</span> 加外键 <span class="k">ON DELETE CASCADE</span>——"书删了向量还在、worker 还在算两小时"这类孤儿数据，在数据库层面已不可表达。</p>
+    <p>正文、元数据、向量、词法倒排、<b>知识图谱</b>同库：配置只有 <span class="k">DATABASE_URL</span>。派生表 <span class="k">chunk_vectors</span> / <span class="k">chunk_lexical</span> / <span class="k">entities</span> / <span class="k">relations</span> 全部对 <span class="k">chunks(id)</span> 或 <span class="k">novels(id)</span> 加外键 <span class="k">ON DELETE CASCADE</span>——"书删了向量还在、图还在、worker 还在算两小时"这类孤儿数据，在数据库层面已不可表达。Milvus 与 Neo4j 都是在这一步被砍掉的。</p>
   </div>
   <div class="note warn">
     <h3>② pgvector 的两个坑必须提前处理</h3>
     <p><b>过滤召回不足</b>：HNSW 先取候选再套 <span class="k">WHERE novel_id</span>，单书占比小时会不足甚至返回 0 且不报错 → 必须 <span class="k">SET LOCAL hnsw.iterative_scan = relaxed_order</span>。<b>中文两字词</b>：PG 默认分词器不切中文 → 正文切 bigram 再建 <span class="k">tsvector</span>，启动时用 <span class="k">_probe_cjk()</span> 自检，不通过就关词法通道并降级 <span class="k">dense_only</span>。</p>
   </div>
   <div class="note">
-    <h3>③ 大模型走 OpenAI 兼容网关</h3>
-    <p>360 网关 <span class="k">api.360.cn/v1</span> + <span class="k">z-ai/glm-5</span>，全部调用走 <span class="k">openai</span> SDK 覆盖 <span class="k">base_url</span>。换 DeepSeek 只改环境变量。不假设上游有 prompt 缓存，成本靠上下文预算控制。</p>
+    <h3>③ 大模型按「要不要思考」分工</h3>
+    <p>问答用 <span class="k">z-ai/glm-5</span>（推理模型），结构化抽取用 <span class="k">LLM_MODEL_FAST=deepseek-chat-v3</span>。原因很硬：glm-5 的正文走 <span class="k">reasoning_content</span>、<span class="k">content</span> 为空，<span class="k">thinking:disabled</span> 实测不生效，用它抽取会 100% 拿回空 JSON。换模型只改环境变量，代码里只有一个 <span class="k">model</span> 参数在变。</p>
   </div>
   <div class="note">
     <h3>④ 切片过程必须看得见</h3>
@@ -284,7 +283,7 @@
         <rect class="accent" x="40" y="52" width="230" height="36" rx="7"/>
         <text class="accentt" x="56" y="75">管理台 SPA（React）</text>
         <rect class="accent" x="284" y="52" width="200" height="36" rx="7"/>
-        <text class="accentt" x="300" y="75">可视化页（G6/ECharts）</text>
+        <text class="accentt" x="300" y="75">可视化页（SVG/ECharts）</text>
         <rect class="accent" x="498" y="52" width="170" height="36" rx="7"/>
         <text class="accentt" x="514" y="75">问答前端</text>
         <rect class="box" x="682" y="52" width="170" height="36" rx="7"/>
@@ -340,8 +339,8 @@
         <text class="stort" x="58" y="470">PostgreSQL · 向量与倒排</text>
         <text class="ch" x="58" y="489">chunk_vectors HNSW · chunk_lexical GIN</text>
         <rect class="stor" x="300" y="446" width="246" height="60" rx="8"/>
-        <text class="stort" x="318" y="470">Neo4j（图谱 · P1）</text>
-        <text class="ch" x="318" y="489">7 类节点 · 10 类关系 · 唯一约束</text>
+        <text class="stort" x="318" y="470">PostgreSQL · 图谱三表</text>
+        <text class="ch" x="318" y="489">entities/relations/mentions · 递归 CTE</text>
         <rect class="stor" x="560" y="446" width="246" height="60" rx="8"/>
         <text class="stort" x="578" y="470">PostgreSQL · 正文与状态</text>
         <text class="ch" x="578" y="489">novels/chapters/chunks/jobs/messages</text>
@@ -365,7 +364,7 @@
         <line x1="540" y1="392" x2="540" y2="408" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
         <line x1="540" y1="522" x2="540" y2="538" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ar)"/>
       </svg>
-      <figcaption>四层架构：写入与查询在能力层分置，共享单库 PostgreSQL 与 Neo4j 两份存储</figcaption>
+      <figcaption>四层架构：写入与查询在能力层分置，全部落到<b>一个</b> PostgreSQL 实例（正文 / 向量 / 倒排 / 图谱四类数据）</figcaption>
     </figure>
   </div>
 </section>
@@ -385,8 +384,8 @@
         <li data-n="3"><b>分层切块</b>parent 1400 tokens / child 400 tokens（overlap 60），对话归属识别</li>
         <li data-n="4"><b>章节摘要</b>glm-5 并发 8，产出 150 字样章摘要（可选，ENABLE_CHAPTER_SUMMARY）</li>
         <li data-n="5"><b>向量化 + 倒排</b>本地 bge-large-zh（int8 · 1024 维 · 8 线程）出稠密向量；同一批文本切 bigram 建 <code>tsvector</code> 倒排，两条路径互不依赖</li>
-        <li data-n="6"><b>图谱抽取</b>规则候选 → glm-5 JSON 抽取 → 别名对齐 → 置信度闸门（P1）</li>
-        <li data-n="7"><b>入库</b>PG 批 16-64 条 <code>INSERT … ON CONFLICT</code>；Neo4j 单事务 1000 条 UNWIND MERGE</li>
+        <li data-n="6"><b>图谱抽取</b>规则候选（零依赖）→ 按块调 <code>deepseek-chat-v3</code>（温度 0）→ 别名对齐 → 三道闸门（P1）</li>
+        <li data-n="7"><b>入库</b>PG 批 16-64 条 <code>INSERT … ON CONFLICT</code>；图谱整书先清空再重建，三个唯一约束兜重边</li>
         <li data-n="8"><b>索引就绪</b>HNSW / GIN 首次自动建；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
       </ol>
     </div>
@@ -398,7 +397,7 @@
       <ol class="steps">
         <li data-n="1"><b>Query 改写</b>glm-5 做指代消解 + 关键词/实体抽取 → <code>standalone_query</code></li>
         <li data-n="2"><b>并行召回</b>稠密 HNSW（<code>iterative_scan</code>，filter <code>novel_id</code>，limit 50）∥ 词法 <code>tsquery</code>（limit 50）</li>
-        <li data-n="3"><b>图谱并发</b>实体定位 → 2-hop 子图（≤60 边）→ 三元组文本化（≤40 条）</li>
+        <li data-n="3"><b>图谱事实</b>问题点名实体（名字/别名子串命中）→ 一跳关系 ≤6 个实体 → 文本化注入；查不到就跳过，不阻塞</li>
         <li data-n="4"><b>RRF 融合</b><code>Σ 1/(60+rank)</code>，对分值尺度不敏感，换模型不用调参</li>
         <li data-n="5"><b>精排</b>bge-reranker-base int8，top50 → top24（约 80 ms）</li>
         <li data-n="6"><b>回溯父块</b>child 命中 → 按 parent 去重取 8 个，控制在 8K token 内</li>
@@ -463,7 +462,7 @@
 
 <section>
   <h2><i>04</i> 存储建模边界</h2>
-  <p class="lead">PostgreSQL 一个库同时存正文、状态、向量、倒排；Neo4j 存关系（P1）。正文是唯一事实源，向量与倒排都是「可重建的派生索引」——区别在于前两者与正文同库，能被外键和级联约束住。</p>
+  <p class="lead">PostgreSQL 一个库同时存正文、状态、向量、倒排、<b>图谱</b>。正文是唯一事实源，向量 / 倒排 / 图谱都是「可重建的派生索引」——四类数据同库，全部被外键和级联约束住，删书没有补偿逻辑要写。</p>
   <div class="schemas">
     <div class="panel schema">
       <h3>chunk_vectors + chunk_lexical <span class="tag">向量与倒排</span></h3>
@@ -478,15 +477,15 @@
       </ul>
     </div>
     <div class="panel schema">
-      <h3>Neo4j 5.x <span class="tag">图模型（P1）</span></h3>
+      <h3>entities / relations / entity_mentions <span class="tag">图谱三表</span></h3>
       <ul>
-        <li><span>节点</span><span>Novel Chapter Character…</span></li>
-        <li><span>Faction / Location</span><span>势力 · 地点</span></li>
-        <li><span>Item / Event / Concept</span><span>物品 · 事件 · 设定</span></li>
-        <li><span>RELATED_TO</span><span>relation 属性扩展</span></li>
-        <li><span>APPEARS_IN</span><span>人物→章节 热度</span></li>
-        <li><span>PARTICIPATES_IN</span><span>人物→事件 角色</span></li>
-        <li><span>约束</span><span>(novel_id, name) 唯一</span></li>
+        <li><span>entities</span><span>name · type(6 类) · aliases jsonb</span></li>
+        <li><span>importance</span><span>mention_count 加权 · 决定节点大小</span></li>
+        <li><span>relations</span><span>src_id → dst_id · 22 种中文关系</span></li>
+        <li><span>evidence</span><span>原文片段 · 点边可回看</span></li>
+        <li><span>status</span><span>active / pending（置信度 &lt; 0.6）</span></li>
+        <li><span>entity_mentions</span><span>实体 × 块 · 热度与时间线</span></li>
+        <li><span>N 跳子图</span><span>递归 CTE · depth &lt; hops 防环</span></li>
       </ul>
     </div>
     <div class="panel schema">
@@ -504,7 +503,91 @@
 </section>
 
 <section>
-  <h2><i>05</i> 性能目标（验收基线）</h2>
+  <h2><i>05</i> 知识图谱：抽取 → 闸门 → 可视化</h2>
+  <p class="lead">
+    P1-M5 / M9 已落地。三层抽取逐层收敛，三道闸门在抽取这一层就拦掉编造；图<b>不进 Neo4j</b>，直接是三张 PG 表，N 跳邻域用递归 CTE。<br>
+    一句话取舍：<b>宁可图小一点、每条边都能点开看原文</b>，也不要一张满是「某人持有某物」的大图。
+  </p>
+  <div class="panel" style="padding:24px 22px 14px">
+    <svg viewBox="0 0 1040 246" role="img" aria-label="图谱抽取与可视化流水线">
+      <defs>
+        <marker id="ga" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+          <path d="M0,0 L9,4.5 L0,9 z" fill="#94a3b8"/>
+        </marker>
+      </defs>
+
+      <!-- 第一行：抽取四步 -->
+      <rect x="16" y="18" width="184" height="76" rx="9" fill="#f8fafc" stroke="#dfe5ee"/>
+      <text x="32" y="42" font-size="12.5" font-weight="600" fill="#0f172a">正文 parent 块</text>
+      <text x="32" y="62" font-size="10.5" fill="#7c8798">800–1400 字 · 按块抽</text>
+      <text x="32" y="79" font-size="10.5" fill="#7c8798">不按章（输出会炸）</text>
+
+      <rect x="220" y="18" width="184" height="76" rx="9" fill="#eef4ff" stroke="#bfd3fb"/>
+      <text x="236" y="42" font-size="12.5" font-weight="600" fill="#1d4ed8">L1 规则候选</text>
+      <text x="236" y="62" font-size="10.5" fill="#475569">对话引导 / 称谓后缀</text>
+      <text x="236" y="79" font-size="10.5" fill="#475569">零依赖，不用 jieba</text>
+
+      <rect x="424" y="18" width="184" height="76" rx="9" fill="#eef4ff" stroke="#bfd3fb"/>
+      <text x="440" y="42" font-size="12.5" font-weight="600" fill="#1d4ed8">L2 LLM 抽取</text>
+      <text x="440" y="62" font-size="10.5" fill="#475569">deepseek-chat-v3 · t=0</text>
+      <text x="440" y="79" font-size="10.5" fill="#475569">JSON 模式 · 截断重试</text>
+
+      <rect x="628" y="18" width="184" height="76" rx="9" fill="#eef4ff" stroke="#bfd3fb"/>
+      <text x="644" y="42" font-size="12.5" font-weight="600" fill="#1d4ed8">L3 并查集对齐</text>
+      <text x="644" y="62" font-size="10.5" fill="#475569">同名同类型 + 别名指向</text>
+      <text x="644" y="79" font-size="10.5" fill="#475569">不做编辑距离合并</text>
+
+      <rect x="832" y="18" width="192" height="76" rx="9" fill="#fdf5e6" stroke="#eccf9a"/>
+      <text x="848" y="42" font-size="12.5" font-weight="600" fill="#b45309">三道闸门</text>
+      <text x="848" y="62" font-size="10.5" fill="#475569">置信度 &lt;0.6 → pending</text>
+      <text x="848" y="79" font-size="10.5" fill="#475569">证据分段命中 / 枚举收敛</text>
+
+      <line x1="200" y1="56" x2="218" y2="56" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+      <line x1="404" y1="56" x2="422" y2="56" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+      <line x1="608" y1="56" x2="626" y2="56" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+      <line x1="812" y1="56" x2="830" y2="56" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+
+      <!-- 第二行：存储与前端 -->
+      <line x1="516" y1="94" x2="516" y2="124" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+      <line x1="516" y1="124" x2="278" y2="124" stroke="#94a3b8" stroke-width="1.2"/>
+      <line x1="278" y1="124" x2="278" y2="140" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+
+      <rect x="16" y="144" width="524" height="72" rx="9" fill="#e9f8f5" stroke="#a7ded4"/>
+      <text x="32" y="168" font-size="12.5" font-weight="600" fill="#0f766e">PostgreSQL 三表 + 递归 CTE</text>
+      <text x="32" y="188" font-size="10.5" fill="#475569">entities · relations · entity_mentions，外键 CASCADE</text>
+      <text x="32" y="205" font-size="10.5" fill="#475569">N 跳子图：递归 CTE，depth &lt; hops 防环</text>
+
+      <rect x="556" y="144" width="468" height="72" rx="9" fill="#f8fafc" stroke="#dfe5ee"/>
+      <text x="572" y="168" font-size="12.5" font-weight="600" fill="#0f172a">前端图谱页（自研 SVG 力导向）</text>
+      <text x="572" y="188" font-size="10.5" fill="#7c8798">拖拽 / 滚轮缩放 / 双击邻域展开 · 点节点出侧栏 · 点边看证据原文</text>
+      <text x="572" y="205" font-size="10.5" fill="#7c8798">默认 2 跳 · 节点上限 200 / 边 400 · 超限返回 truncated</text>
+
+      <line x1="540" y1="180" x2="554" y2="180" stroke="#94a3b8" stroke-width="1.2" marker-end="url(#ga)"/>
+
+      <text x="16" y="238" font-size="10.5" fill="#7c8798">实测：《长夜将明》87 实体 · 164 关系（133 确认 + 31 待确认）· 696 提及 · 证据零丢弃 · 5.6 min</text>
+    </svg>
+  </div>
+
+  <div class="panel" style="margin-top:14px;padding:18px 20px">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;font-size:13.5px;color:var(--ink-2)">
+      <div>
+        <div style="font-weight:600;color:var(--ink);margin-bottom:4px">左栏 · 筛选</div>
+        实体搜索（名字/别名/描述）· 类型分布条形图 · 关系类型 Top15 ·「显示待确认边」开关 · 重新构建（force）
+      </div>
+      <div>
+        <div style="font-weight:600;color:var(--ink);margin-bottom:4px">中栏 · 画布</div>
+        力导向布局，节点大小 = importance、颜色 = 类型、边粗细 = strength；<span style="font-family:var(--mono);font-size:12.5px">pending</span> 边画虚线
+      </div>
+      <div>
+        <div style="font-weight:600;color:var(--ink);margin-bottom:4px">右栏 · 详情</div>
+        实体描述与别名 · 该实体的全部关系 · 每条关系带章节号与证据原文（点「定位」跳到对应块）· 出现章节时间线
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2><i>06</i> 性能目标（验收基线）</h2>
   <p class="lead">以下指标写入验收清单，每项都要有可复现的测量脚本，不接受「感觉挺快」。</p>
   <div class="kpis">
     <div class="kpi"><div class="v">30<em>min</em></div><div class="l">100 万字全流程</div><div class="n">解析→切块→向量→图谱</div></div>
@@ -519,7 +602,7 @@
 </section>
 
 <section>
-  <h2><i>06</i> 实施优先级与交付标准</h2>
+  <h2><i>07</i> 实施优先级与交付标准</h2>
   <p class="lead">六个阶段约 37 人日（1 后端 + 1 前端）。P0 先打通「能问」的闭环，P1 补质量与可视化，P2 做生产化。</p>
   <div class="road">
     <div class="phase p0">
@@ -540,15 +623,16 @@
     <div class="phase p1">
       <header><span class="p">P1 · 图谱与质量</span><span class="d">≈ 15 人日</span></header>
       <div class="body">
-        <p class="goal">知识图谱上线，检索从单通道升级为混合 + 精排，两个可视化页面可用。</p>
+        <p class="goal">知识图谱上线（PG 三表，不装图库），检索从单通道升级为混合 + 精排，图谱页可用。</p>
         <ul>
-          <li>LLM 抽取 + 别名对齐 + Neo4j</li>
+          <li>LLM 抽取（按块）+ 别名对齐 + <b>PG 三表</b></li>
           <li>混合检索 + RRF + rerank</li>
-          <li>图谱可视化（G6，2 跳子图）</li>
+          <li>图谱可视化（自研 SVG 力导向，2 跳子图）</li>
+          <li>图谱事实注入问答（use_graph）</li>
           <li>向量降维散点（UMAP 预计算）</li>
           <li>完整管理台四模块</li>
         </ul>
-        <div class="accept"><b>验收：</b>Recall@10 ≥ 0.85 且比纯向量基线高 8pt；200 节点子图渲染 &lt; 1 s。</div>
+        <div class="accept"><b>验收：</b>Recall@10 ≥ 0.85 且比纯向量基线高 8pt；200 节点子图渲染 &lt; 1 s；抽取证据零丢弃（《长夜将明》87 实体 / 164 关系已达标）。</div>
       </div>
     </div>
     <div class="phase p2">
@@ -569,7 +653,7 @@
 </section>
 
 <section>
-  <h2><i>07</i> 主要风险与对策</h2>
+  <h2><i>08</i> 主要风险与对策</h2>
   <div class="panel" style="padding:8px 18px 10px">
     <table class="tbl">
       <thead>
@@ -578,19 +662,20 @@
       <tbody>
         <tr><td>目标库没装 pgvector</td><td><span class="dot h"></span>阻断</td><td>启动查 <code>pg_extension</code>，缺失即抛带安装指引的 <code>RuntimeError</code>；Docker 用 <code>pgvector/pgvector:pg18</code></td></tr>
         <tr><td>LLM 抽取编造关系</td><td><span class="dot h"></span>高</td><td>三道闸门：<code>confidence≥0.6</code> + <code>evidence</code> 原文回查 + 关系枚举校验；低置信进人工队列</td></tr>
-        <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>别名对齐（编辑距离 + 字符重叠 + 向量相似）+ LLM 仲裁；管理台提供实体合并</td></tr>
+        <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>并查集对齐：同名同类型 + 别名指向（<b>刻意不做编辑距离/包含关系合并</b>——"张飞"与"张飞燕"很近却是两人）；待确认边进人工队列</td></tr>
         <tr><td>HNSW 索引没建（懒建机制）</td><td><span class="dot h"></span>高</td><td>检索退化为全表扫描、随数据量线性变慢；<code>/health</code> 暴露 <code>index</code> 字段，迁移后查 <code>pg_indexes</code> 补建</td></tr>
         <tr><td>过滤检索召回不足</td><td><span class="dot m"></span>中</td><td>HNSW 先取候选再过滤，单书占比小时不足且不报错；每次检索事务内 <code>SET LOCAL hnsw.iterative_scan=relaxed_order</code></td></tr>
         <tr><td>章节切分错误（无章节号长文）</td><td><span class="dot m"></span>中</td><td>多级正则兜底 + 长度约束二次切；管理台支持手动修正章节边界</td></tr>
         <tr><td>360 网关限流 / 超时</td><td><span class="dot h"></span>高</td><td>信号量 4 + 429 指数退避；抽取失败转规则抽取并标记 low_confidence；保留 DeepSeek 备份通道（改 base_url 即切）</td></tr>
-        <tr><td>大图渲染卡死</td><td><span class="dot l"></span>低</td><td>后端强制 <code>limit</code>，超 500 节点返回 <code>truncated=true</code> 并提示缩小范围</td></tr>
+        <tr><td>大图渲染卡死</td><td><span class="dot l"></span>低</td><td>后端强制节点/边上限（<code>200 / 400</code>），超限返回 <code>truncated=true</code>；前端默认 2 跳、按 <code>importance</code> 取骨架，不在首屏画全书</td></tr>
+        <tr><td>推理模型抽不出结构化结果</td><td><span class="dot h"></span>高</td><td>glm-5 正文走 <code>reasoning_content</code>、<code>content</code> 为空（27 次调用全空）；抽取固定用 <code>LLM_MODEL_FAST</code>，返回空时打告警指向该配置</td></tr>
       </tbody>
     </table>
   </div>
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.5</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.7</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

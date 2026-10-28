@@ -37,7 +37,9 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         raise HTTPException(409, f"小说尚未完成入库（当前状态 {novel.status}），请等待切片与向量化完成")
 
     session_id = await rag.ensure_session(req.novel_id, req.session_id, req.question)
-    messages, result, _ = await rag.prepare(req.novel_id, req.question, session_id)
+    messages, result, _, graph_facts = await rag.prepare(
+        req.novel_id, req.question, session_id, use_graph=req.use_graph
+    )
     citations = [c.to_dict() for c in result.citations]
     llm = get_llm()
 
@@ -50,11 +52,12 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "degraded": result.degraded,
                 "mode": result.mode,
                 "retrieval": result.detail,
+                "graph_facts": graph_facts,
             },
         )
         buffer: list[str] = []
         try:
-            async for delta in llm.stream(messages, temperature=0.6, max_tokens=3000):
+            async for delta in llm.stream(messages, temperature=0.6, max_tokens=4096):
                 if await request.is_disconnected():
                     logger.info("客户端断开，中止生成")
                     break
