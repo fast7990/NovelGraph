@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.9</div>
+  <div class="eyebrow">Technical Architecture · v1.10</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -384,7 +384,7 @@
         <li data-n="3"><b>分层切块</b>parent 1400 tokens / child 400 tokens（overlap 60），对话归属识别</li>
         <li data-n="4"><b>章节摘要</b>glm-5 并发 8，产出 150 字样章摘要（可选，ENABLE_CHAPTER_SUMMARY）</li>
         <li data-n="5"><b>向量化 + 倒排</b>本地 bge-large-zh（int8 · 1024 维 · 8 线程）出稠密向量；同一批文本切 bigram 建 <code>tsvector</code> 倒排，两条路径互不依赖</li>
-        <li data-n="6"><b>图谱抽取</b>规则候选（零依赖）→ 按块调 <code>deepseek-chat-v3</code>（温度 0）→ 别名对齐 → 三道闸门（P1）</li>
+        <li data-n="6"><b>图谱抽取</b>规则候选（零依赖）→ 按块调 <code>deepseek-chat-v3</code>（温度 0）→ 泛称闸门 + 仅专名别名对齐 → 三道闸门（P1）</li>
         <li data-n="7"><b>入库</b>PG 批 16-64 条 <code>INSERT … ON CONFLICT</code>；图谱整书先清空再重建，三个唯一约束兜重边</li>
         <li data-n="8"><b>索引就绪</b>HNSW / GIN 首次自动建；状态置 READY，问答立即可用（图谱略滞后不阻塞）</li>
       </ol>
@@ -742,7 +742,7 @@
       <tbody>
         <tr><td>目标库没装 pgvector</td><td><span class="dot h"></span>阻断</td><td>启动查 <code>pg_extension</code>，缺失即抛带安装指引的 <code>RuntimeError</code>；Docker 用 <code>pgvector/pgvector:pg18</code></td></tr>
         <tr><td>LLM 抽取编造关系</td><td><span class="dot h"></span>高</td><td>三道闸门：<code>confidence≥0.6</code> + <code>evidence</code> 原文回查 + 关系枚举校验；低置信进人工队列</td></tr>
-        <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>并查集对齐：同名同类型 + 别名指向（<b>刻意不做编辑距离/包含关系合并</b>——"张飞"与"张飞燕"很近却是两人）；待确认边进人工队列</td></tr>
+        <tr><td>人物多称谓导致图谱碎裂</td><td><span class="dot h"></span>高</td><td>并查集对齐：同名同类型 + <b>专名</b>别名指向，连通分量上限 6（泛称别名曾把曹操/董卓/诸葛武侯焊成一个 blob，曹操直接从实体表消失）；<b>刻意不做编辑距离/包含关系合并</b>；待确认边进人工队列</td></tr>
         <tr><td>HNSW 索引没建（懒建机制）</td><td><span class="dot h"></span>高</td><td>检索退化为全表扫描、随数据量线性变慢；<code>/health</code> 暴露 <code>index</code> 字段，迁移后查 <code>pg_indexes</code> 补建</td></tr>
         <tr><td>过滤检索召回不足</td><td><span class="dot m"></span>中</td><td>HNSW 先取候选再过滤，单书占比小时不足且不报错；每次检索事务内 <code>SET LOCAL hnsw.iterative_scan=relaxed_order</code></td></tr>
         <tr><td>章节切分错误（无章节号长文）</td><td><span class="dot m"></span>中</td><td>多级正则兜底 + 长度约束二次切；管理台支持手动修正章节边界</td></tr>
@@ -755,7 +755,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.9</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.10</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

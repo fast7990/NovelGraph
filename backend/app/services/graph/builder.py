@@ -81,6 +81,7 @@ class GraphBuildStats:
     llm_calls: int = 0
     llm_errors: int = 0
     dropped_no_evidence: int = 0
+    dropped_honorific_alias: int = 0
     evidence_partial: int = 0
     other_relation: int = 0
     duration_sec: float = 0.0
@@ -97,6 +98,7 @@ class GraphBuildStats:
             "llm_calls": self.llm_calls,
             "llm_errors": self.llm_errors,
             "dropped_no_evidence": self.dropped_no_evidence,
+            "dropped_honorific_alias": self.dropped_honorific_alias,
             "evidence_partial": self.evidence_partial,
             "other_relation": self.other_relation,
             "duration_sec": self.duration_sec,
@@ -327,6 +329,9 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
             best[key] = r
 
     stats.dropped_no_evidence = acc.stats.get("dropped_no_evidence", 0)
+    # 被词表拦下的泛称别名条数：这是"还有多少桥没拆"的体检指标，
+    # 正常应有非零值（模型每次都会试着塞「丞相」），突然归零说明闸门失效
+    stats.dropped_honorific_alias = acc.stats.get("dropped_honorific_alias", 0)
     stats.evidence_partial = acc.stats.get("evidence_partial", 0)
     stats.other_relation = acc.stats.get("other_relation", 0)
     stats.entities = len(aligned.entities)

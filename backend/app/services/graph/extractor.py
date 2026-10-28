@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from app.config import settings
 from app.models import ENTITY_TYPES, RELATION_TYPES
+from app.services.graph.lexicon import is_honorific
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,8 @@ SYSTEM_PROMPT = """你是中文小说的知识图谱抽取器。从给定正文�
 ## 抽取规则
 1. 只抽正文里明确写出的内容。不要用你的常识补充正文没提的关系。
 2. evidence 必须逐字复制正文里的连续片段（10-60 字），不要改写、不要加省略号、不要自己总结。这一条最重要：找不到原文出处的关系统计上多半是错的。
-3. 同一人物的不同称谓（本名/小名/尊称/绰号/官职）放进 aliases，name 用正文里最常用的那个。
+3. 同一人物的不同称谓放进 aliases，但**只填专名**：字（孟德）、号（卧龙）、小名（阿瞒）、绰号（凤雏）、别称（诸葛孔明）。name 用正文里最常用的那个。
+   **严禁**把官职、尊称、泛称写进 aliases —— 丞相、相国、太师、将军、都督、太守、主公、明公、恩相、大人、先生、夫人、公子、天子、陛下、大王、殿下 这类称呼在全书里指向很多人，混进别名会把不同的人合并成一个，是图谱最主要的污染源。
 4. 不抽代词（他/那人/此人/众人）。只出现一次且没有任何关系的路人也不抽。
 5. 关系的 src 和 dst 必须是你本次抽出的实体名，不能凭空造名字。
 6. strength 是关系强度 0-1（决定子图里边的粗细）；confidence 是你对这条关系确实成立的把握 0-1。证据含糊、需要推断时 confidence 必须低于 0.6。
@@ -127,6 +129,7 @@ def parse_extraction(raw: dict, *, text: str, known: set[str] | None = None) -> 
         "entities": 0,
         "relations": 0,
         "dropped_bad_entity": 0,
+        "dropped_honorific_alias": 0,
         "dropped_bad_relation": 0,
         "dropped_no_evidence": 0,
         "evidence_partial": 0,
@@ -156,12 +159,17 @@ def parse_extraction(raw: dict, *, text: str, known: set[str] | None = None) -> 
             for a in (item.get("aliases") or [])
             if isinstance(a, (str, int)) and 1 < len(_clean_name(a)) <= 20
         ]
+        # 泛称别名是"两个实体被焊成一个"的唯一入口，在进图层之前就掐掉。
+        # 提示词里已经禁过一遍，这里再按词表兜一层——模型不听话是常态。
+        uniq = [a for a in dict.fromkeys(aliases) if a != name]
+        kept = [a for a in uniq if not is_honorific(a)]
+        stats["dropped_honorific_alias"] += len(uniq) - len(kept)
         entities.append(
             ExtractedEntity(
                 name=name,
                 type=etype,
                 # 剔除和本名重复的别名，前端展示时不用再判重
-                aliases=[a for a in dict.fromkeys(aliases) if a != name][:8],
+                aliases=kept[:8],
                 desc=str(item.get("desc") or "").strip()[:200],
             )
         )

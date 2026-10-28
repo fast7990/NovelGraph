@@ -6,7 +6,16 @@
 合并只走两条**可验证**的路径，不做激进猜测：
 
 1. **同名同类型** —— 天然合并，靠唯一键
-2. **别名指向** —— A 的 aliases 里有 B 的名字，且同类型，就并到 A
+2. **专名别名指向** —— A 的 aliases 里有 B 的名字，且 `is_mergeable_alias` 放行
+
+第二道闸门是血的教训。《三国演义》第一版图谱里，模型把"丞相"写进了曹操、董卓、
+诸葛武侯三个实体的 aliases，并查集顺着这根链一路 union，长出 2961 条提及的 blob，
+曹操本人被 12 条别名上限挤掉，从实体表和搜索里彻底消失。所以现在：
+
+- 泛称别名在进图前就被 `lexicon.is_honorific` 剔掉；
+- 只有 2-4 字、非泛称、非封号结尾的专名才能触发合并；
+- 单次合并有连通分量上限（`MAX_GROUP_SIZE`），宁可让一个人拆成两个节点，
+  也不要把半本书焊成一个——前者看得见、能人工合，后者不可逆。
 
 刻意**不做**的两件事：
 
@@ -24,6 +33,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from app.services.graph.extractor import ExtractedEntity
+from app.services.graph.lexicon import canonical_score, is_honorific, is_mergeable_alias
+
+# 一个连通分量最多合并几个实体。实测：正常情况下同一个人能被抽成 2-4 个名字
+# （本名 / 字 / 号 / 别称），6 已经留了余量；超过就是"链式误并"的征兆。
+MAX_GROUP_SIZE = 6
+
+# 别名展示上限。成员本名排在最前面（构造时就是先放本名再放字号），
+# 所以这个上限只会截掉边缘的绰号，不会把"曹孟德"这种关键信息挤掉。
+ALIAS_KEEP = 16
 
 
 @dataclass
@@ -67,7 +85,9 @@ class AlignResult:
     entities: list[MergedEntity]
     # 任意别名 → 规范名，回填关系时用它把 "孟德" 映射成 "曹操"
     alias_map: dict[str, str]
-    merged_pairs: list[tuple[str, str]]
+    # (组内主名, 被并入的名字, 触发合并的桥别名)。桥别名是审计用的：
+    # 一旦再出现 blob，直接看是哪个词把两个不相干的人连起来的。
+    merged_pairs: list[tuple[str, str, str]]
 
     def canonical(self, name: str, etype: str = "") -> str:
         if etype:
@@ -81,10 +101,11 @@ def align(
     mentions: dict[str, int] | None = None,
     first_chapter: dict[str, int] | None = None,
 ) -> AlignResult:
-    """合并同名与别名指向的实体。
+    """合并同名与专名别名指向的实体。
 
     `mentions` / `first_chapter` 的 key 是 `f"{type}\x00{name}"`，
-    由调用方在同一遍扫描里统计（避免这里再回表）。
+    由调用方在同一遍扫描里统计（避免这里再回表）。不传也能跑：
+    此时 mention_count 退化成"这个词被多少块抽到"，用来当选规范名的 tie-break 已经够。
     """
     mentions = mentions or {}
     first_chapter = first_chapter or {}
@@ -99,7 +120,7 @@ def align(
                 type=e.type,
                 desc=e.desc,
                 first_chapter=first_chapter.get(f"{e.type}\x00{e.name}", 0),
-                mention_count=mentions.get(f"{e.type}\x00{e.name}", 1),
+                mention_count=mentions.get(f"{e.type}\x00{e.name}", 0),
             )
             acc[key] = m
         else:
@@ -109,30 +130,49 @@ def align(
             fc = first_chapter.get(f"{e.type}\x00{e.name}", 0)
             if fc and (not m.first_chapter or fc < m.first_chapter):
                 m.first_chapter = fc
+        # 被多少块抽到 = 这个词在书里有多常用，是选规范名时唯一可靠的 tie-break
+        m.mention_count += 1
         for a in e.aliases:
-            if a != m.name and a not in m.aliases:
+            # L3 的第二道防线：即便 L2 那一层漏了（历史数据、别的调用方），
+            # 泛称也不进别名表——它一进来就是合并的依据。
+            if a != m.name and a not in m.aliases and not is_honorific(a):
                 m.aliases.append(a)
 
     uf = UnionFind()
+    size: dict[tuple[str, str], int] = {}
     for key in acc:
         uf.add(key)
+        size[key] = 1
 
-    # 路径 2：别名指向已有实体名 → 合并。
-    # 只在同类型内做，且"指向方"必须比"被指向方"提及更少，
-    # 否则会出现"曹操"被并进"孟德"这种反直觉结果（谁常用谁是主名）。
-    merged_pairs: list[tuple[str, str]] = []
+    # 候选合并对，按"证据强度"从高到低处理。强度用两边提及量的较小值：
+    # 一个只出现一次的"孟德"不该把提及八百次的"曹操"拽过去；
+    # 2 字专名比 3-4 字更可靠，给一点加成当 tie-break。
+    cand: list[tuple[float, tuple[str, str], tuple[str, str], str]] = []
     for key, m in acc.items():
         for alias in m.aliases:
+            if not is_mergeable_alias(alias, m.name):
+                continue
             target = (m.type, alias)
             if target not in acc:
                 continue
             other = acc[target]
-            if other.mention_count > m.mention_count:
-                uf.union(target, key)
-                merged_pairs.append((other.name, m.name))
-            else:
-                uf.union(key, target)
-                merged_pairs.append((m.name, other.name))
+            strength = min(m.mention_count, other.mention_count) + (0.5 if len(alias) == 2 else 0)
+            cand.append((strength, key, target, alias))
+    cand.sort(key=lambda x: -x[0])
+
+    merged_pairs: list[tuple[str, str, str]] = []
+    for _strength, ka, kb, alias in cand:
+        ra, rb = uf.find(ka), uf.find(kb)
+        if ra == rb:
+            continue
+        if size[ra] + size[rb] > MAX_GROUP_SIZE:
+            # 再并下去就是 blob：曹操 —丞相→ 董卓 —丞相→ 诸葛武侯 这种链式误并。
+            continue
+        if size[ra] < size[rb]:          # 大组当根，最终规范名更稳
+            ra, rb = rb, ra
+        uf.parent[rb] = ra
+        size[ra] += size[rb]
+        merged_pairs.append((acc[ra].name, acc[rb].name, alias))
 
     groups: dict[tuple[str, str], list[MergedEntity]] = {}
     for key, m in acc.items():
@@ -141,35 +181,66 @@ def align(
     merged: list[MergedEntity] = []
     alias_map: dict[str, str] = {}
     for members in groups.values():
-        # 规范名：提及最多的那个。并列时取更长的（"诸葛孔明" 比 "孔明" 信息量大）
-        members.sort(key=lambda x: (-x.mention_count, -len(x.name)))
+        # 规范名：先看字面结构（本名 > 字 > 号 > 封号），提及量只做 tie-break。
+        # 不能反过来——提及量本身被泛称灌过水，拿污染源当裁判没有意义。
+        members.sort(key=lambda x: (-canonical_score(x.name), -x.mention_count, -len(x.name)))
         head = members[0]
-        alias_set: set[str] = set(head.aliases)
-        total = head.mention_count
+
+        total = 0
         first = head.first_chapter
         desc = head.desc
-        for other in members[1:]:
-            alias_set.add(other.name)
-            # 被合并方的别名也是这个人的别名（"孟德"的别名"阿瞒"）
-            alias_set.update(other.aliases)
+        for other in members:
             total += other.mention_count
             if other.first_chapter and (not first or other.first_chapter < first):
                 first = other.first_chapter
             if len(other.desc) > len(desc):
                 desc = other.desc
 
-        merged_entity = MergedEntity(
-            name=head.name,
-            type=head.type,
-            aliases=[a for a in alias_set if a != head.name][:12],
-            desc=desc,
-            first_chapter=first,
-            mention_count=total,
+        # 别名顺序：先成员本名（"曹孟德"比任何绰号都重要），再各成员的字/号
+        aliases: list[str] = []
+        for other in members:
+            if other is not head and other.name != head.name and other.name not in aliases:
+                aliases.append(other.name)
+        for other in members:
+            for a in other.aliases:
+                if a != head.name and a not in aliases:
+                    aliases.append(a)
+
+        merged.append(
+            MergedEntity(
+                name=head.name,
+                type=head.type,
+                aliases=aliases,
+                desc=desc,
+                first_chapter=first,
+                mention_count=total,
+            )
         )
-        merged.append(merged_entity)
-        for name in [head.name, *merged_entity.aliases]:
-            alias_map[name] = head.name
-            alias_map[f"{head.type}\x00{name}"] = head.name
+        # 成员名一律映射到 head，**不做别名截断**：
+        # 这里漏一个名字，回填关系时就少一条边（第一版曹操消失的直接原因）。
+        for member in members:
+            alias_map[member.name] = head.name
+            alias_map[f"{head.type}\x00{member.name}"] = head.name
 
     merged.sort(key=lambda x: -x.mention_count)
+
+    # 一个词只能归一个人：别名撞车时归给提及量最大的那个组。
+    # 本名永远优先——它是另一条实体的 name，不能被抢去当别名。
+    all_names = {(e.type, e.name) for e in merged}
+    claimed: dict[tuple[str, str], str] = {}
+    for ent in merged:
+        keep: list[str] = []
+        for a in ent.aliases:
+            if a == ent.name or (ent.type, a) in all_names:
+                continue
+            k = (ent.type, a)
+            if k in claimed:
+                continue
+            claimed[k] = ent.name
+            keep.append(a)
+        ent.aliases = keep[:ALIAS_KEEP]
+        for a in ent.aliases:
+            alias_map[a] = ent.name
+            alias_map[f"{ent.type}\x00{a}"] = ent.name
+
     return AlignResult(entities=merged, alias_map=alias_map, merged_pairs=merged_pairs)
