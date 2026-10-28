@@ -14,6 +14,7 @@ import {
 } from '@douyinfe/semi-ui'
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
 import PageHead from '../components/PageHead'
+import { usePoll } from '../hooks/usePoll'
 import { api, Chunk, ChunkReport, fmtNum, Novel } from '../api/client'
 
 const SEV_LABEL: Record<string, string> = { info: '提示', warn: '警告', error: '严重' }
@@ -103,15 +104,17 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
     }
   }, [novelId, level, chapter, page])
 
+  const running = novel && ['PROCESSING', 'PENDING', 'VECTORIZING'].includes(novel.status)
+
   useEffect(() => {
     loadReport()
     loadChunks()
-    const t = setInterval(loadReport, 4000)
-    return () => clearInterval(t)
   }, [loadReport, loadChunks])
 
+  // 报告只在本书仍在处理时才值得刷；处理完（或切到后台）就停手
+  usePoll(loadReport, 4000, !!running)
+
   const histMax = Math.max(1, ...(report?.token_hist || [1]))
-  const running = novel && ['PROCESSING', 'PENDING', 'VECTORIZING'].includes(novel.status)
 
   const issueColumns: ColumnProps<any>[] = [
     {

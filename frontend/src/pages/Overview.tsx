@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Banner, Button, Card, Col, Progress, Row, Tag, Typography } from '@douyinfe/semi-ui'
 import { IconArrowRight } from '@douyinfe/semi-icons'
 import PageHead from '../components/PageHead'
+import { usePoll } from '../hooks/usePoll'
 import { api, fmtNum } from '../api/client'
 
 const TAG_COLOR = { ok: 'green', degraded: 'amber', error: 'red', down: 'red' } as const
@@ -35,15 +36,17 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
   const [stats, setStats] = useState<any>(null)
   const [err, setErr] = useState('')
 
-  useEffect(() => {
-    const load = () => {
-      api.health().then(setHealth).catch((e) => setErr(String(e.message || e)))
-      api.stats().then(setStats).catch(() => {})
-    }
-    load()
-    const t = setInterval(load, 5000)
-    return () => clearInterval(t)
+  const load = useCallback(() => {
+    api.health().then(setHealth).catch((e) => setErr(String(e.message || e)))
+    api.stats().then(setStats).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  // 健康/统计属于"看着舒心"的数据，页面在后台时没必要一直打
+  usePoll(load, 5000)
 
   const cfg = health?.config || {}
   const deps: any[] = health?.deps || []

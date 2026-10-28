@@ -353,7 +353,10 @@ export const STAGE_LABEL: Record<string, string> = {
   INDEXING: '写入索引',
   COMPLETED: '已完成',
   FAILED: '失败',
+  CANCELED: '已取消',
   VECTORIZING: '向量化中',
   READY: '就绪',
   PROCESSING: '处理中',
+  GRAPH_EXTRACTING: '图谱抽取',
+  GRAPH_WRITING: '图谱写入',
 }

@@ -16,6 +16,7 @@ import {
 import { IconUpload } from '@douyinfe/semi-icons'
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
 import PageHead from '../components/PageHead'
+import { usePoll } from '../hooks/usePoll'
 import { api, fmtBytes, fmtNum, Job, Novel, STAGE_LABEL } from '../api/client'
 
 const STATUS_COLOR = {
@@ -36,26 +37,38 @@ export default function Upload({ onGo }: { onGo: (t: any, id?: string) => void }
   const [err, setErr] = useState('')
   const [info, setInfo] = useState<any>(null)
   const inputRef = useRef<HTMLInputElement>(null)
+  const inflight = useRef(false)
+  const sigRef = useRef('')
 
   const refresh = useCallback(async () => {
+    if (inflight.current) return
+    inflight.current = true
     try {
       const [n, j] = await Promise.all([api.novels(), api.jobs()])
-      setNovels(n.items)
       const map: Record<string, Job> = {}
       // 每个 novel 取最新一条 job（后端已按时间倒序返回）
       for (const job of j) if (!map[job.novel_id]) map[job.novel_id] = job
-      setJobs(map)
+      const sig = JSON.stringify([n.items, map])
+      if (sig !== sigRef.current) {
+        sigRef.current = sig
+        setNovels(n.items)
+        setJobs(map)
+      }
     } catch (e: any) {
       setErr(String(e.message || e))
+    } finally {
+      inflight.current = false
     }
   }, [])
+
+  // 只有"还有书在处理中"才值得轮询；全部就绪时彻底停手，别让一个静止页面一直打接口
+  const hasLive = novels.some((n) => n.status === 'PROCESSING' || n.status === 'VECTORIZING' || n.status === 'PENDING')
+  usePoll(refresh, 1800, hasLive)
 
   useEffect(() => {
     refresh()
     // 入库参数只在进入页面时取一次，不跟着进度轮询
     api.stats().then(setInfo).catch(() => {})
-    const t = setInterval(refresh, 1800)
-    return () => clearInterval(t)
   }, [refresh])
 
   const doUpload = async (file: File) => {

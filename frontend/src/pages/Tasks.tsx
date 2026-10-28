@@ -13,6 +13,7 @@ import {
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
 import { IconRefresh } from '@douyinfe/semi-icons'
 import PageHead from '../components/PageHead'
+import { usePoll } from '../hooks/usePoll'
 import { api, Job, Novel, STAGE_LABEL, fmtNum } from '../api/client'
 
 /** 任务种类：库里 kind 只有 ingest / rebuild / graph 三种，界面上要说人话。 */
@@ -88,15 +89,30 @@ export default function Tasks({ novelId, onGo }: { novelId: string; onGo: (t: an
   const [auto, setAuto] = useState(true)
   const autoRef = useRef(auto)
   autoRef.current = auto
+  const jobsRef = useRef<Job[]>([])
+  jobsRef.current = jobs
+  // 单飞：同一时刻只允许一个请求在途，松手才发下一个
+  const inflight = useRef(false)
+  // 内容指纹：接口回来的数据没变就不 setState，省掉整页重渲染
+  const sigRef = useRef('')
 
   const load = useCallback(() => {
+    if (inflight.current) return
+    inflight.current = true
     api
       .jobs({ novelId: bookId || undefined, status: status || undefined, kind: kind || undefined, limit: 100 })
       .then((r) => {
-        setJobs(r)
+        const sig = JSON.stringify(r)
+        if (sig !== sigRef.current) {
+          sigRef.current = sig
+          setJobs(r)
+        }
         setErr('')
       })
       .catch((e) => setErr(String(e.message || e)))
+      .finally(() => {
+        inflight.current = false
+      })
   }, [bookId, status, kind])
 
   useEffect(() => {
@@ -104,13 +120,15 @@ export default function Tasks({ novelId, onGo }: { novelId: string; onGo: (t: an
   }, [])
 
   useEffect(() => {
+    sigRef.current = '' // 筛选变化后强制接受新结果
     load()
-    const t = setInterval(() => {
-      // 自动刷新只在有活任务时才跑，避免页面挂着一直打接口
-      if (autoRef.current && jobs.some(isLive)) load()
-    }, 3000)
-    return () => clearInterval(t)
-  }, [load, jobs])
+  }, [load])
+
+  // 自动刷新：只有存在活任务才轮询，切到后台自动停。
+  // 判活用 ref 读最新列表——把 jobs 放依赖会形成自激循环（见 usePoll 注释）。
+  usePoll(() => {
+    if (autoRef.current && jobsRef.current.some(isLive)) load()
+  }, 3000)
 
   const titleOf = (id: string) => {
     const n = novels.find((x) => x.id === id)
