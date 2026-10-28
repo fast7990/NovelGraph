@@ -11,6 +11,11 @@ from __future__ import annotations
 
 _cancelled: set[str] = set()
 
+# 按 job_id 的取消信号：用户在任务中心点"取消"。
+# 与按 novel_id 的删除信号分开，因为两者收尾动作完全不同：
+# 删书要清空该书的向量，取消任务不该动已有数据。
+_jobs: set[str] = set()
+
 
 class IngestCancelled(Exception):
     """入库被主动取消（通常是这本书已经被删了）。"""
@@ -18,6 +23,14 @@ class IngestCancelled(Exception):
     def __init__(self, novel_id: str) -> None:
         super().__init__(f"入库已取消：novel={novel_id}")
         self.novel_id = novel_id
+
+
+class JobCancelled(Exception):
+    """任务被用户取消（数据保留，只停止继续消耗 CPU / 网关配额）。"""
+
+    def __init__(self, job_id: str) -> None:
+        super().__init__(f"任务已取消：job={job_id}")
+        self.job_id = job_id
 
 
 def cancel(novel_id: str) -> None:
@@ -30,3 +43,15 @@ def clear(novel_id: str) -> None:
 
 def is_cancelled(novel_id: str) -> bool:
     return novel_id in _cancelled
+
+
+def cancel_job(job_id: str) -> None:
+    _jobs.add(job_id)
+
+
+def clear_job(job_id: str) -> None:
+    _jobs.discard(job_id)
+
+
+def is_job_cancelled(job_id: str) -> bool:
+    return job_id in _jobs

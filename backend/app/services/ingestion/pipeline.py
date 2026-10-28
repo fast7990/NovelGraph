@@ -24,7 +24,7 @@ from app.services.ingestion import chunker, parser
 from app.services.retrieval import lexical
 from app.services.storage import get_storage
 from app.services.vector.factory import get_vector_store
-from app.workers.cancel import IngestCancelled, is_cancelled
+from app.workers.cancel import IngestCancelled, JobCancelled, is_cancelled, is_job_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -257,6 +257,8 @@ async def run_ingest(job_id: str) -> None:
         for i in range(0, total, EMBED_ROWS_PER_BATCH):
             if is_cancelled(novel_id):          # 书被删了就别再烧 CPU
                 raise IngestCancelled(novel_id)
+            if is_job_cancelled(job_id):        # 用户主动取消：停手，但保留已有数据
+                raise JobCancelled(job_id)
             batch = embed_pool[i : i + EMBED_ROWS_PER_BATCH]
             vectors = await embedder.embed_documents([b["content"] for b in batch])
             rows = []
@@ -316,8 +318,21 @@ async def run_ingest(job_id: str) -> None:
             written,
             duration,
         )
+    except JobCancelled:
+        # 用户取消：只把任务标成已取消，书与已写入的数据都保留（可以重试接着跑）
+        logger.warning("ingest 被用户取消 job=%s", job_id)
+        async with SessionLocal() as db:
+            job = await db.get(Job, job_id)
+            if job:
+                job.status = "CANCELED"
+                job.stage = "CANCELED"
+                job.error = "用户取消"
+                job.finished_at = _utcnow()
+            novel = await db.get(Novel, novel_id)
+            if novel:
+                novel.status = "CANCELED"
+            await db.commit()
     except Exception as exc:  # noqa: BLE001
-        logger.exception("ingest failed job=%s", job_id)
         async with SessionLocal() as db:
             job = await db.get(Job, job_id)
             if job:
@@ -374,6 +389,8 @@ async def rebuild_vectors(novel_id: str, job_id: str, resume: bool = True) -> No
     for i in range(0, len(rows), EMBED_ROWS_PER_BATCH):
         if is_cancelled(novel_id):              # 书被删了就别再烧 CPU
             raise IngestCancelled(novel_id)
+        if is_job_cancelled(job_id):
+            raise JobCancelled(job_id)
         batch = rows[i : i + EMBED_ROWS_PER_BATCH]
         vectors = await embedder.embed_documents([r.content for r in batch])
         payload = [

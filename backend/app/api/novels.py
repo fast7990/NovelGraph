@@ -262,7 +262,8 @@ async def rebuild(
     novel = await db.get(Novel, novel_id)
     if not novel:
         raise HTTPException(404, "小说不存在")
-    job = Job(novel_id=novel_id, status="PENDING", stage="PENDING")
+    # kind 记下来，任务中心重试时才知道该按"重新入库"还是"只重算向量"来跑
+    job = Job(novel_id=novel_id, kind="ingest" if mode == "full" else "rebuild", status="PENDING", stage="PENDING")
     db.add(job)
     novel.status = "PROCESSING"
     await db.commit()

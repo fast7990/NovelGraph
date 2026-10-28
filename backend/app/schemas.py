@@ -36,6 +36,7 @@ class NovelListOut(BaseModel):
 class JobOut(BaseModel):
     id: str
     novel_id: str
+    kind: str = "ingest"
     status: str
     stage: str
     progress: float
@@ -47,6 +48,7 @@ class JobOut(BaseModel):
     vectors_written: int
     error: str = ""
     stats: dict = Field(default_factory=dict)
+    created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
 

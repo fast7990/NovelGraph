@@ -18,6 +18,7 @@ export type Novel = {
 export type Job = {
   id: string
   novel_id: string
+  kind?: string
   status: string
   stage: string
   progress: number
@@ -29,6 +30,9 @@ export type Job = {
   vectors_written: number
   error: string
   stats: Record<string, any>
+  created_at?: string
+  started_at?: string | null
+  finished_at?: string | null
 }
 
 export type Citation = {
@@ -116,9 +120,17 @@ export const api = {
     return j<{ novel_id: string; job_id: string }>(res)
   },
 
-  jobs: (novelId?: string) =>
-    fetch(`${BASE}/jobs${novelId ? `?novel_id=${novelId}` : ''}`).then((r) => j<Job[]>(r)),
+  jobs: (params: { novelId?: string; status?: string; kind?: string; limit?: number } = {}) => {
+    const q = new URLSearchParams()
+    if (params.novelId) q.set('novel_id', params.novelId)
+    if (params.status) q.set('status', params.status)
+    if (params.kind) q.set('kind', params.kind)
+    q.set('limit', String(params.limit || 50))
+    return fetch(`${BASE}/jobs?${q}`).then((r) => j<Job[]>(r))
+  },
   job: (id: string) => fetch(`${BASE}/jobs/${id}`).then((r) => j<Job>(r)),
+  jobRetry: (id: string) => fetch(`${BASE}/jobs/${id}/retry`, { method: 'POST' }).then((r) => j<any>(r)),
+  jobCancel: (id: string) => fetch(`${BASE}/jobs/${id}/cancel`, { method: 'POST' }).then((r) => j<any>(r)),
   rebuild: (novelId: string) =>
     fetch(`${BASE}/novels/${novelId}/chunks/rebuild`, { method: 'POST' }).then((r) => j<any>(r)),
 

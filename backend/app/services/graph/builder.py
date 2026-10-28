@@ -35,7 +35,7 @@ from app.services.graph import candidates as cand
 from app.services.graph.aligner import AlignResult, align
 from app.services.graph.extractor import ChunkExtraction, ExtractedEntity, ExtractedRelation, extract_chunk
 from app.services.llm.client import get_llm
-from app.workers.cancel import IngestCancelled, is_cancelled
+from app.workers.cancel import IngestCancelled, JobCancelled, is_cancelled, is_job_cancelled
 
 logger = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ async def build_graph(job_id: str, *, novel_id: str | None = None) -> dict:
 
     try:
         await _run(job_id, novel_id, stats, started)
-    except IngestCancelled:
+    except (IngestCancelled, JobCancelled):
         logger.warning("graph 构建被取消 novel=%s", novel_id)
         async with SessionLocal() as db:
             job = await db.get(Job, job_id)
@@ -228,6 +228,8 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
         for b in chapter_blocks:
             if is_cancelled(novel_id):
                 raise IngestCancelled(novel_id)
+            if is_job_cancelled(job_id):
+                raise JobCancelled(job_id)
             res = await extract_chunk(llm, b.content, chapter_no=no, chapter_title=title, known_names=known)
             acc.merge(res, b.chunk_id, no)
             stats.llm_calls += 1
@@ -250,7 +252,7 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
         async with sem:
             try:
                 await run_chapter(no, bl)
-            except IngestCancelled:
+            except (IngestCancelled, JobCancelled):
                 raise
             except Exception:  # noqa: BLE001
                 logger.warning("chapter %s 抽取失败，跳过", no, exc_info=True)

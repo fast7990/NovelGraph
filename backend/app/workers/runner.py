@@ -11,7 +11,7 @@ import asyncio
 import logging
 
 from app.services.ingestion.pipeline import rebuild_vectors, run_ingest
-from app.workers.cancel import IngestCancelled, clear
+from app.workers.cancel import IngestCancelled, JobCancelled, clear, clear_job
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,9 @@ async def _loop() -> None:
     while True:
         job_id, kind = await q.get()
         try:
+            if await _canceled_in_db(job_id):
+                logger.info("job %s 在排队期间已被取消，跳过", job_id)
+                continue
             if kind == "graph":
                 # 图谱抽取是 IO 密集（等 LLM），放这里跑会占住队列让入库排队。
                 # 但队列本来就是串行的，且入库和图谱同时跑会互相抢 CPU/网关配额，
@@ -58,12 +61,44 @@ async def _loop() -> None:
             except Exception:  # noqa: BLE001
                 logger.warning("取消后清理残留向量失败 novel=%s", exc.novel_id, exc_info=True)
             clear(exc.novel_id)
+        except JobCancelled as exc:
+            # 用户取消：不清理数据，只把任务标成已取消（pipeline 里已处理的不会再走到这里）
+            logger.warning("job %s 被用户取消", exc.job_id)
+            await _mark_canceled(exc.job_id)
+            clear_job(exc.job_id)
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
             logger.exception("job %s 执行异常", job_id)
         finally:
             q.task_done()
+
+
+async def _canceled_in_db(job_id: str) -> bool:
+    from app.db import SessionLocal
+    from app.models import Job
+
+    async with SessionLocal() as db:
+        job = await db.get(Job, job_id)
+        if job is None:
+            return True
+        return job.status == "CANCELED"
+
+
+async def _mark_canceled(job_id: str) -> None:
+    from app.db import SessionLocal
+    from app.models import Job
+
+    try:
+        async with SessionLocal() as db:
+            job = await db.get(Job, job_id)
+            if job and job.status not in ("COMPLETED", "FAILED"):
+                job.status = "CANCELED"
+                job.stage = "CANCELED"
+                job.error = job.error or "用户取消"
+            await db.commit()
+    except Exception:  # noqa: BLE001
+        logger.warning("标记任务取消失败 job=%s", job_id, exc_info=True)
 
 
 async def _job_novel(job_id: str) -> str:
