@@ -236,17 +236,21 @@ body {
 .tok-bar .tok-main { color: var(--semi-color-text-2); font-weight: 500; }
 .tok-bar .tok-sep { color: var(--semi-color-border); }
 
-/* 消息级操作（当前只有「重新生成」）。
-   常驻但压得很淡：完全隐藏的入口等于没有入口（用户抱怨的正是"找不到"），
-   hover 时提亮即可，不至于喧宾夺主。 */
-.msg-ops { display: flex; gap: 10px; margin-top: 6px; height: 18px; }
-.msg-op {
-  font-size: 12px; color: var(--semi-color-text-3);
-  cursor: pointer; opacity: 0.62; transition: opacity 0.15s, color 0.15s;
-  user-select: none;
+/* ---------- 聊天正文 ---------- */
+/* Semi 的 MarkdownRender 只给 p / strong 套了 Typography（14px / 20px），
+   列表是裸元素，直接继承 body 的 16px 且 line-height: normal。于是同一个
+   回答里"正文 14px、编号列表 16px"，比用户提问整整大一号——用户看到的就是
+   "AI 回答的字比我的问题大"。这里把列表拉回正文尺寸；行高也一并补上，
+   否则多行 li 会挤成一坨。
+
+   只改列表不全局改 .semi-markdownRender 的 font-size：标题靠 em 相对计算，
+   动基线会让所有标题一起缩水，而标题本来就该比正文大。 */
+.semi-chat .semi-markdownRender ul,
+.semi-chat .semi-markdownRender ol,
+.semi-chat .semi-markdownRender li {
+  font-size: 14px;
+  line-height: 20px;
 }
-.msg-body:hover .msg-op { opacity: 1; }
-.msg-op:hover { color: var(--semi-color-primary); }
 
 /* 上下文承接提示条：告诉用户这一轮用到了上文的哪些实体 */
 .mem-bar {

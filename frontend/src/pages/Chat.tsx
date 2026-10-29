@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Avatar, Card, Chat, Empty, Resizable, Select, Tag, Typography } from '@douyinfe/semi-ui'
+import { Avatar, Card, Chat, Empty, Resizable, Select, Tag, Toast, Typography } from '@douyinfe/semi-ui'
 import type { Message } from '@douyinfe/semi-ui/lib/es/chat/interface'
 import PageHead from '../components/PageHead'
 import ReasoningPanel from '../components/ReasoningPanel'
@@ -160,6 +160,10 @@ export default function ChatPage({
           content: m.content,
           createAt: new Date(m.created_at).getTime(),
           status: 'complete',
+          // 后端存的是单列枚举，Semi 要两个布尔。回放时必须映射回去，
+          // 否则刷新一次用户点过的赞就"消失"了——数据还在，只是图标不亮
+          like: m.feedback === 'up',
+          dislike: m.feedback === 'down',
         } as Message)
         if (m.role === 'assistant' && m.citations?.length) {
           cites[m.id] = m.citations
@@ -283,6 +287,9 @@ export default function ChatPage({
 
     setLoading(true)
     const aid = `a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+    // 服务端真实 id 在 done 事件里才拿到；在此之前所有 UI 都挂本地临时 id。
+    // 用独立变量而不是就地改 aid：这些 setState 都是闭包，改 const 做不到。
+    let answerId = aid
     setActiveId(aid)
     setActiveIdx(-1)
     // 用户消息由 Chat 内部追加并通过 onChatsChange 回传，这里只补占位的助手消息。
@@ -296,8 +303,14 @@ export default function ChatPage({
     // 从"点发送"就开始有反馈：先挂一个 retrieving 占位，meta 到了转 thinking
     const think = { text: '', phase: 'retrieving' as ThinkPhase, ms: undefined as number | undefined }
     let timer: number | null = null
-    const flush = () =>
-      setThinkMap((prev) => ({ ...prev, [aid]: { text: think.text, phase: think.phase, ms: think.ms } }))
+    const flush = () => {
+      // 同上：updater 里不要直接读 answerId，它会在 done 时被改写
+      const key = answerId
+      setThinkMap((prev) => ({
+        ...prev,
+        [key]: { text: think.text, phase: think.phase, ms: think.ms },
+      }))
+    }
     const scheduleFlush = () => {
       if (timer != null) return
       timer = window.setTimeout(() => {
@@ -326,11 +339,11 @@ export default function ChatPage({
         },
         (event, data) => {
           if (event === 'meta') {
-            setCiteMap((prev) => ({ ...prev, [aid]: data.citations || [] }))
-            setModeMap((prev) => ({ ...prev, [aid]: (data.mode || 'hybrid') as RetrievalMode }))
+            setCiteMap((prev) => ({ ...prev, [answerId]: data.citations || [] }))
+            setModeMap((prev) => ({ ...prev, [answerId]: (data.mode || 'hybrid') as RetrievalMode }))
             setRetMap((prev) => ({
               ...prev,
-              [aid]: {
+              [answerId]: {
                 mode: data.mode || 'hybrid',
                 dense: data.retrieval?.dense,
                 lexical: data.retrieval?.lexical,
@@ -348,7 +361,7 @@ export default function ChatPage({
             const mem = data.memory || {}
             setMemMap((prev) => ({
               ...prev,
-              [aid]: {
+              [answerId]: {
                 turns: Number(mem.turns || 0),
                 entities: Array.isArray(mem.entities) ? mem.entities : [],
               },
@@ -366,26 +379,49 @@ export default function ChatPage({
               stopFlush()
               flush()
             }
-            setChats((prev) =>
-              prev.map((m) =>
-                m.id === aid ? { ...m, content: String(m.content || '') + data.text } : m,
-              ),
-            )
+            {
+              const key = answerId
+              setChats((prev) =>
+                prev.map((m) =>
+                  m.id === key ? { ...m, content: String(m.content || '') + data.text } : m,
+                ),
+              )
+            }
           } else if (event === 'done') {
             think.phase = 'done'
             think.ms = data.reasoning_ms ?? think.ms
+            // 先把思考区定版，再换 id —— 留着 pending 的 flush 会在换完 id 之后
+            // 又往旧 key 写一次，把刚清掉的临时 id 重新塞回 Map
+            stopFlush()
+            flush()
+            // 换成服务端真实 id：本地这个 `a-<ts>-<rand>` 只活在界面里，
+            // 拿它去调「点赞 / 删除」后端只会回 404（这就是"假删除"的成因）
+            const realId = String(data.message_id || '')
+            if (realId && realId !== answerId) {
+              // 必须把旧 id 存成常量再进 updater。updater 是在 React 渲染阶段
+              // 才执行的，那时 answerId 已经赋值成 realId 了 —— 直接写
+              // `m.id === answerId` 一条都匹配不上，消息会永远停在 loading
+              // （表现就是"答完了但图标栏是灰的、点赞/删除全 404"）
+              const prevId = answerId
+              setChats((prev) => prev.map((m) => (m.id === prevId ? { ...m, id: realId } : m)))
+              setActiveId((cur) => (cur === prevId ? realId : cur))
+              moveKey(prevId, realId)
+              answerId = realId
+            }
             // 消耗在 done 里就拿到了，不用等下面的列表刷新：
             // 列表刷新只更新侧栏的累计数，气泡里显示的是这一轮自己的账
             if (data.usage) {
-              setUsageMap((prev) => ({ ...prev, [aid]: data.usage as RoundUsage }))
+              const useId = answerId
+              setUsageMap((prev) => ({ ...prev, [useId]: data.usage as RoundUsage }))
             }
           } else if (event === 'error') {
             think.phase = 'done'
             stopFlush()
             flush()
+            const key = answerId
             setChats((prev) =>
               prev.map((m) =>
-                m.id === aid
+                m.id === key
                   ? { ...m, content: String(m.content || '') || `生成失败：${data.message || '未知错误'}`, status: 'error' as const }
                   : m,
               ),
@@ -394,18 +430,22 @@ export default function ChatPage({
         },
         ctrl.signal,
       )
-      setChats((prev) =>
-        prev.map((m) =>
-          m.id === aid ? { ...m, status: (m.content ? 'complete' : 'error') as 'complete' | 'error' } : m,
-        ),
-      )
+      {
+        // done 分支已经把 id 换成服务端的了，这里按最新的匹配
+        const key = answerId
+        setChats((prev) =>
+          prev.map((m) =>
+            m.id === key ? { ...m, status: (m.content ? 'complete' : 'error') as 'complete' | 'error' } : m,
+          ),
+        )
+      }
       // 落库完成 → 刷新会话列表（标题/条数/时间都变了）
       void loadSessions(novelId, queryRef.current)
     } catch (e: any) {
       const aborted = e?.name === 'AbortError'
       setChats((prev) =>
         prev.map((m) =>
-          m.id === aid
+          m.id === answerId
             ? {
                 ...m,
                 status: (aborted ? 'incomplete' : 'error') as 'incomplete' | 'error',
@@ -428,21 +468,54 @@ export default function ChatPage({
   const retMode = modeMap[activeId]
 
   // 最后一条答案是唯一能"重新生成"的目标：更早的答案已被后续对话引用，
-  // 重答它而不重答后面的问题，上下文会自相矛盾。
-  const lastAnsId = (() => {
-    for (let i = chats.length - 1; i >= 0; i--) {
-      if (chats[i].role === 'assistant') return String(chats[i].id || '')
-    }
-    return ''
-  })()
+  // 重答它而不重答后面的问题，上下文会自相矛盾。Semi 的消息栏自己按
+  // `lastChat && role === assistant` 判断，这里不用再算一遍。
 
-  /** 重新生成一条答案：删掉它、用同一个问题重发，历史里不会多出一轮。 */
+  /** 把各 Map 里 from 的条目改名成 to。
+   *
+   * `done` 事件会把消息 id 从本地临时值换成服务端真值，所有以 id 为 key 的
+   * 状态都得跟着搬——不搬的话引用 / 用量 / 思考面板会原地"失联"，
+   * 同一条答案在界面里等于变成了两个互不相干的 id。
+   */
+  const moveKey = (from: string, to: string) => {
+    if (!from || !to || from === to) return
+    const mv = <T,>(p: Record<string, T>): Record<string, T> => {
+      if (!(from in p)) return p
+      const next = { ...p }
+      next[to] = p[from]
+      delete next[from]
+      return next
+    }
+    setCiteMap(mv)
+    setUsageMap(mv)
+    setThinkMap(mv)
+    setRetMap(mv)
+    setMemMap(mv)
+  }
+
+  /** 清掉某条消息在各类附属 Map 里的条目（引用/用量/思考/检索/记忆）。
+   *
+   * 消息被删或重新生成后旧 id 就没人再引用，不清就是永久泄漏——
+   * 重新生成会换一个新 id，旧条目没有任何机会被回收。
+   */
+  const dropMsg = (mid: string) => {
+    setCiteMap((p) => omit(p, mid))
+    setUsageMap((p) => omit(p, mid))
+    setThinkMap((p) => omit(p, mid))
+    setRetMap((p) => omit(p, mid))
+    setMemMap((p) => omit(p, mid))
+  }
+
   const regenerate = (aid: string) => {
     if (loading) return
-    const idx = chats.findIndex((m) => String(m.id || '') === aid)
-    if (idx < 0) return
+    // 找不到就退回"最后一条"：⟳ 图标本身只挂在最后一条答案上。
+    // 而且 Semi 的 resetMessage 会先把最后一条换成 loading 占位再回调
+    // （换了新 id），所以按 id 找不到是正常情况，不能直接放弃。
+    const found = chats.findIndex((m) => String(m.id || '') === aid)
+    const cut = found >= 0 ? found : chats.length - 1
+    if (cut < 0) return
     let q = ''
-    for (let i = idx - 1; i >= 0; i--) {
+    for (let i = cut - 1; i >= 0; i--) {
       if (chats[i].role === 'user') {
         q = String(chats[i].content || '')
         break
@@ -451,18 +524,49 @@ export default function ChatPage({
     if (!q.trim()) return
     // 截到这条答案之前：它后面的消息理论上不存在（只有最后一条才有入口），
     // 但万一有，也一并丢掉——否则会出现"答案 A 被换掉、基于 A 的追问还留着"
-    setChats((prev) => prev.slice(0, idx))
-    setCiteMap((prev) => {
-      const next = { ...prev }
-      delete next[aid]
-      return next
-    })
-    setUsageMap((prev) => {
-      const next = { ...prev }
-      delete next[aid]
-      return next
-    })
+    setChats((prev) => prev.slice(0, cut))
+    // 旧答案的附属状态要一起清掉：不清的话这些 Map 按消息 id 只增不减，
+    // 而重新生成会换一个新 id，旧条目永远没人回收
+    dropMsg(aid)
     void send(q, { regenerate: true })
+  }
+
+  /** 点赞 / 点踩。Semi 负责图标状态，这里负责让它活过刷新。
+   *
+   * `next` 由调用方算好（Semi 传进来的是**切换前**的 message），
+   * 空串表示取消：赞和踩是互斥的，后端只有一列 `feedback`。
+   */
+  const rate = async (mid: string, next: '' | 'up' | 'down') => {
+    if (!mid) return
+    try {
+      await api.chatMessageFeedback(mid, next)
+      Toast.success(next === 'up' ? '已标记为有用' : next === 'down' ? '已记录，会用来改进' : '已取消')
+      void loadSessions(novelId, queryRef.current)
+    } catch {
+      Toast.error('评价没存上，请稍后重试')
+    }
+  }
+
+  /** 删除单条消息（消息栏的垃圾桶）。 */
+  const removeMessage = async (mid: string) => {
+    if (!mid) return
+    try {
+      const r = await api.chatMessageDelete(mid)
+      dropMsg(mid)
+      // 删空了后端会连会话一起收掉，这时界面也得回到"没有会话"的状态，
+      // 否则右上角还挂着 session_id，下一条消息会往一个已删的会话里塞
+      if (r.session_deleted && sessionRef.current === r.session_id) {
+        sessionRef.current = ''
+        setSessionId('')
+        syncUrl('')
+        setChats([])
+        setActiveId('')
+      }
+      Toast.success('已删除')
+      void loadSessions(novelId, queryRef.current)
+    } catch {
+      Toast.error('删除失败，请稍后重试')
+    }
   }
 
   return (
@@ -521,6 +625,18 @@ export default function ChatPage({
               chats={chats}
               onChatsChange={(list) => setChats(list || [])}
               onMessageSend={(content) => send(content)}
+              // 消息栏那排图标（复制 / 赞 / 踩 / 刷新 / 删除）是答案最常用的操作，
+              // 必须都接上真实现：不接回调 Semi 照样把按钮画出来，点下去毫无反应，
+              // 用户分不清是"功能坏了"还是"根本没做"。复制由 Semi 内置（带 toast），
+              // 其余四个各自落到后端。
+              onMessageReset={(msg) => regenerate(String(msg?.id || ''))}
+              onMessageGoodFeedback={(msg) =>
+                void rate(String(msg?.id || ''), msg?.like ? '' : 'up')
+              }
+              onMessageBadFeedback={(msg) =>
+                void rate(String(msg?.id || ''), msg?.dislike ? '' : 'down')
+              }
+              onMessageDelete={(msg) => void removeMessage(String(msg?.id || ''))}
               onHintClick={(hint) => send(hint)}
               hints={chats.length === 0 ? SUGGESTIONS : []}
               roleConfig={ROLE_CONFIG}
@@ -558,13 +674,12 @@ export default function ChatPage({
                   const mem = mid ? memMap[mid] : undefined
                   const us = mid ? usageMap[mid] : undefined
                   if (message?.role !== 'assistant') return defaultContent
-                  // 有思考面板 / 引用 / 用量 / 重新生成入口，任一成立就走自定义渲染。
-                  // 最后一条答案必须走这条分支：否则它的"重新生成"按钮渲染不出来。
+                  // 有思考面板 / 引用 / 用量，任一成立就走自定义渲染；
+                  // 三者都没有就交回 Semi，别为了空壳多包一层 div
                   const hasRound = (us?.round?.total_tokens || 0) > 0
                   const hasUsage =
                     !!us && (hasRound || (us.total?.total_tokens || 0) > 0)
-                  const showRegen = mid === lastAnsId && !loading && message.status !== 'loading'
-                  if (!panel && !cs?.length && !hasUsage && !showRegen) return defaultContent
+                  if (!panel && !cs?.length && !hasUsage) return defaultContent
                   return (
                     <div className="msg-body">
                       {panel}
@@ -637,18 +752,6 @@ export default function ChatPage({
                               资料 {i + 1} · 第 {c.chapter_no} 章
                             </span>
                           ))}
-                        </div>
-                      )}
-                      {showRegen && (
-                        <div className="msg-ops">
-                          <span
-                            className="msg-op"
-                            role="button"
-                            title="用同一个问题重答一遍，不会多出一条历史"
-                            onClick={() => regenerate(mid)}
-                          >
-                            ⟳ 重新生成
-                          </span>
                         </div>
                       )}
                     </div>
@@ -736,4 +839,13 @@ export default function ChatPage({
       )}
     </>
   )
+}
+
+/** 不可变地删掉一个 key。用来清消息的附属状态——
+ *  对象 Map 的条目不可能靠渲染回收，必须显式 delete。 */
+function omit<T>(rec: Record<string, T>, key: string): Record<string, T> {
+  if (!(key in rec)) return rec
+  const next = { ...rec }
+  delete next[key]
+  return next
 }

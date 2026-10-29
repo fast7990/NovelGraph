@@ -237,21 +237,30 @@ async def save_answer(
     seq: int,
     answer: str,
     citations: list[dict],
-) -> None:
-    """把回答接在提问后面存。seq 由 save_question 给出，保证同回合严格有序。"""
+) -> str:
+    """把回答接在提问后面存。seq 由 save_question 给出，保证同回合严格有序。
+
+    返回新消息的主键：前端在流结束前用的是本地临时 id（`a-<ts>-<rand>`），
+    拿它去调「点赞 / 删除消息」只会得到 404——必须在 `done` 事件里把服务端
+    真实 id 交回去，前端才有可操作的对象。
+    """
     if not answer.strip():
-        return
+        return ""
     async with SessionLocal() as db:
-        db.add(
-            ChatMessage(
-                session_id=session_id,
-                role="assistant",
-                content=answer,
-                citations=citations or [],
-                seq=seq + 1,
-            )
+        msg = ChatMessage(
+            session_id=session_id,
+            role="assistant",
+            content=answer,
+            citations=citations or [],
+            seq=seq + 1,
         )
+        db.add(msg)
+        # 先 flush 拿 id 再 commit：commit 之后对象会 expire，
+        # 在 async 会话里再访问属性会触发一次隐式 refresh，白跑一个 I/O
+        await db.flush()
+        mid = msg.id
         await db.commit()
+    return mid
 
 
 async def drop_last_turn(session_id: str, expect: str = "") -> str:

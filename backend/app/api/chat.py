@@ -37,12 +37,15 @@ async def _persist_and_housekeep(
     三件事绑在一起，是因为它们都以"这一轮已落库"为前提：摘要要能看到最新消息，
     用量要包含这一轮的请求。任一步失败都不该连累另外两步，所以各自兜住。
 
-    返回 `{"round": 本轮用量, "total": 会话累计}`，供 `done` 事件回传前端
-    —— 前端要在这轮答完的瞬间就能显示消耗，不该再发一次列表请求去等落账。
+    返回 `{"round": 本轮用量, "total": 会话累计, "message_id": 新消息 id}`，
+    供 `done` 事件回传前端——前端要在这轮答完的瞬间就能显示消耗，不该再发
+    一次列表请求去等落账；`message_id` 则是让"点赞 / 删除这条答案"有真对象
+    可指（前端手里的 id 是本地临时 id，拿去调接口只会 404）。
     """
     round_usage: dict = {}
+    message_id = ""
     try:
-        await memory.save_answer(session_id, qseq, answer, cites)
+        message_id = await memory.save_answer(session_id, qseq, answer, cites)
     except Exception:  # noqa: BLE001
         logger.exception("落库失败 会话=%s", session_id)
     try:
@@ -58,7 +61,7 @@ async def _persist_and_housekeep(
     except Exception:  # noqa: BLE001
         logger.warning("读累计用量失败 会话=%s", session_id, exc_info=True)
         total = {}
-    return {"round": round_usage, "total": total}
+    return {"round": round_usage, "total": total, "message_id": message_id}
 
 
 @router.post("/chat")
@@ -220,9 +223,16 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "reasoning_ms": reasoning_ms,
                 "ttft_ms": ttft_ms,
                 "elapsed_ms": elapsed(),
+                # 服务端真实的消息 id。前端发送时手里只有本地临时 id，
+                # 不带回去的话，这条答案的「点赞 / 删除」注定 404
+                "message_id": usage_info.get("message_id") or "",
                 # 本轮的 token 消耗与会话累计：前端在答案下方直接显示，
-                # 用户不用去侧栏找、也不用等列表刷新
-                "usage": usage_info,
+                # 用户不用去侧栏找、也不用等列表刷新。
+                # 只挑这两个子字段，别把 message_id 混进用量结构里
+                "usage": {
+                    "round": usage_info.get("round") or {},
+                    "total": usage_info.get("total") or {},
+                },
             },
         )
 
@@ -354,6 +364,7 @@ async def session_messages(session_id: str) -> dict:
                 "content": r.content,
                 "citations": r.citations,
                 "seq": r.seq,
+                "feedback": r.feedback or "",
                 "created_at": r.created_at,
             }
             for r in rows
@@ -451,6 +462,58 @@ async def delete_session(session_id: str) -> dict:
         await db.delete(sess)
         await db.commit()
     return {"deleted": session_id}
+
+
+@router.patch("/chat/messages/{message_id}/feedback")
+async def set_message_feedback(message_id: str, payload: dict) -> dict:
+    """给一条回答打「有用 / 没用」。传空字符串表示取消。
+
+    `feedback` 只有一列而不是 like/dislike 两个布尔：赞和踩是互斥的，
+    两列会允许 `like=1, dislike=1` 这种非法态，出问题时无从判断以谁为准。
+    单列 + 枚举让状态机只有一个真相来源。踩的理由将来要收集，也是加
+    `feedback_note` 列，而不是再加一个布尔。
+    """
+    value = str(payload.get("feedback", "")).strip().lower()
+    if value not in ("", "up", "down"):
+        raise HTTPException(400, "feedback 只能是 up / down / 空")
+    async with SessionLocal() as db:
+        msg = await db.get(ChatMessage, message_id)
+        if msg is None:
+            raise HTTPException(404, "消息不存在")
+        if msg.role != "assistant":
+            raise HTTPException(400, "只能对回答打反馈")
+        msg.feedback = value
+        session_id = msg.session_id
+        await db.commit()
+    return {"id": message_id, "feedback": value, "session_id": session_id}
+
+
+@router.delete("/chat/messages/{message_id}")
+async def delete_message(message_id: str) -> dict:
+    """删除一条消息。
+
+    只删点中的那一条，不连带删配对的另一条：界面上的垃圾桶就长在这条消息
+    底下，用户对它的预期是"这个消失"。如果偷偷把上面的提问也删掉，反而
+    制造了"我删的不是我点的那条"的意外。
+    """
+    async with SessionLocal() as db:
+        msg = await db.get(ChatMessage, message_id)
+        if msg is None:
+            raise HTTPException(404, "消息不存在")
+        session_id = msg.session_id
+        await db.delete(msg)
+        await db.commit()
+        # 删空了就把会话也收掉：否则侧栏留一个"0 条"的幽灵会话，
+        # 点进去什么也没有，用户还得再删一次
+        left = await db.scalar(
+            select(func.count()).select_from(ChatMessage).where(ChatMessage.session_id == session_id)
+        )
+        if not left:
+            sess = await db.get(ChatSession, session_id)
+            if sess is not None:
+                await db.delete(sess)
+                await db.commit()
+    return {"deleted": message_id, "session_id": session_id, "session_deleted": not left}
 
 
 @router.post("/chat/sessions")

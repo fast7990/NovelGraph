@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.16</div>
+  <div class="eyebrow">Technical Architecture · v1.17</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -260,6 +260,10 @@
   <div class="note">
     <h3>⑦ 合不上的别硬凑规则，交给人工表</h3>
     <p><span class="k">武侯</span>(46)、<span class="k">诸葛武侯</span>(6)、<span class="k">献帝</span>(40)、<span class="k">陈留王</span>(24) 明明指同两个人，却各占一个节点——它们被 <span class="k">is_mergeable_alias</span> 判成封号，永远进不了别名表。这不是模型抽错，是<b>规则天然覆盖不到</b>：要靠知识，靠不了模式。解法是配置化人工表（管下次重建）+ 迁移脚本（管存量修数据）。两条硬约束：规范名以人工表右边为准（否则「献帝」45 分会压过「汉献帝」5 分），只认"只被指向不被并入"的名字（链条中间态不能当终点）。</p>
+  </div>
+  <div class="note">
+    <h3>⑧ 画出来的按钮不是功能</h3>
+    <p>Semi 的 Chat <b>不传回调也照样</b>把复制 / 赞 / 踩 / 刷新 / 删除五个图标画出来，点下去全是空转——比不显示更糟，用户分不清"坏了"还是"没做"。假删除的根因是<b>临时 id</b>：界面用的是本地 <span class="k">a-&lt;ts&gt;</span>，服务端的 <span class="k">cm_xxx</span> 落库时才生成，拿占位 id 调删除接口必然 404，而 Semi 会先把消息从自己的列表摘掉，看起来就像删成功了。修法是 <span class="k">done</span> 事件回传 <span class="k">message_id</span> 让界面换成真 id。另外，字体大小不一致的真相不是"两边样式不同"——<span class="k">p</span> 两侧都是 14px，是 <span class="k">li</span> 漏在了 Typography 外面，继承 body 的 16px，于是回答一用编号列表就整体大一号。</p>
   </div>
 </div>
 
@@ -767,7 +771,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.16</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.17</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

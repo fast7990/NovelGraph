@@ -116,6 +116,8 @@ export type ChatHistoryMessage = {
   content: string
   citations: Citation[]
   seq: number
+  /** 人工反馈：'up' / 'down' / ''。回放时映射成 Semi 的 like / dislike */
+  feedback?: 'up' | 'down' | ''
   created_at: string
 }
 
@@ -216,6 +218,18 @@ export const api = {
     }).then((r) => j<{ id: string; title: string }>(r)),
   chatSessionDelete: (sessionId: string) =>
     fetch(`${BASE}/chat/sessions/${sessionId}`, { method: 'DELETE' }).then((r) => j<any>(r)),
+
+  // ---- 消息级操作（聊天区那排图标背后的真接口）----
+  chatMessageDelete: (messageId: string) =>
+    fetch(`${BASE}/chat/messages/${messageId}`, { method: 'DELETE' }).then((r) =>
+      j<{ deleted: string; session_id: string; session_deleted: boolean }>(r),
+    ),
+  chatMessageFeedback: (messageId: string, feedback: '' | 'up' | 'down') =>
+    fetch(`${BASE}/chat/messages/${messageId}/feedback`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feedback }),
+    }).then((r) => j<{ id: string; feedback: string }>(r)),
 
   vectorSample: (novelId: string, limit = 400) =>
     fetch(`${BASE}/novels/${novelId}/vectors/sample?limit=${limit}`).then((r) => j<any>(r)),

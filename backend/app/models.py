@@ -233,6 +233,10 @@ class ChatMessage(Base):
     content: Mapped[str] = mapped_column(Text, default="")
     citations: Mapped[list] = mapped_column(JSONB, default=list)
     seq: Mapped[int] = mapped_column(Integer, default=0)
+    # 人工反馈：'up' / 'down' / ''（未表态）。
+    # 不存布尔对是因为"赞"和"踩"互斥，两列会出现 up=1,down=1 这种非法态；
+    # 单列让状态机只有一个真相来源，将来要加"复制"等埋点也只扩枚举。
+    feedback: Mapped[str] = mapped_column(String(8), default="")
     created_at: Mapped[datetime] = _TZ.col(default=_now)
 
 

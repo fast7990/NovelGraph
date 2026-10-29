@@ -108,6 +108,8 @@ _COLUMN_PATCHES = (
     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS prompt_tokens BIGINT NOT NULL DEFAULT 0",
     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS completion_tokens BIGINT NOT NULL DEFAULT 0",
     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS llm_calls INTEGER NOT NULL DEFAULT 0",
+    # 消息级人工反馈（点赞/点踩），刷新后要能回显，所以必须落库
+    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS feedback VARCHAR(8) NOT NULL DEFAULT ''",
 )
 
 
