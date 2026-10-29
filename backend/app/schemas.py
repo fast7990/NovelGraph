@@ -106,6 +106,10 @@ class ChatRequest(BaseModel):
     top_k: int | None = None
     # 是否把命中实体的一跳关系注入 prompt（图谱未建时自动无效果）
     use_graph: bool = True
+    # 重新生成：先删掉会话最后一轮问答，再用同一个问题重答。
+    # 放在同一个接口而不是新开一个，是因为它和普通提问走完全相同的检索/生成链路，
+    # 唯一差别是"落库前先清掉上一轮"——多一个接口就要多维护一份流式逻辑。
+    regenerate: bool = False
 
 
 class SearchRequest(BaseModel):

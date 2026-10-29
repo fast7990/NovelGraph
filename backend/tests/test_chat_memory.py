@@ -334,3 +334,75 @@ class TestMemoryBlockWithSummary:
         """窗口里一条原文回合都没有时，摘要本身仍要有输出。"""
         block = memory.build_memory_block([], summary="只有摘要")
         assert "只有摘要" in block
+
+
+# ---------- 重新生成 ----------
+
+
+class _SelectResult:
+    def __init__(self, v):
+        self.v = v
+
+    def scalar_one_or_none(self):
+        return self.v
+
+
+class _DropDB:
+    """专门给 drop_last_turn 用的假上下文：能分清 select 与 delete。"""
+
+    def __init__(self, last_user):
+        self.last_user = last_user
+        self.deleted = 0
+        self.committed = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def execute(self, stmt, *a, **k):
+        if str(stmt).lstrip().upper().startswith("DELETE"):
+            self.deleted += 1
+            return _SelectResult(None)
+        return _SelectResult(self.last_user)
+
+    async def commit(self):
+        self.committed += 1
+
+
+class TestDropLastTurn:
+    """「重新生成」要先把上一轮删掉。
+
+    不删的话历史里会多出一条重复提问和两条答案，下一轮提问时模型会看到
+    "同一个问题被问了两次、答了两遍"，上下文直接变脏。
+    """
+
+    def test_drops_last_turn(self, monkeypatch):
+        db = _DropDB(_Msg(seq=5, role="user", content="华佗的著作有哪些"))
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        out = _run(memory.drop_last_turn("cs_fake", expect="华佗的著作有哪些"))
+        assert out == "华佗的著作有哪些"
+        assert db.deleted == 1
+        assert db.committed == 1
+
+    def test_refuses_when_question_differs(self, monkeypatch):
+        """最后一轮不是这个问题就不删 —— 宁可退回普通提问，也不能静默删掉
+        用户另一段对话（两个标签页同时操作、或点了重新生成又切了会话）。"""
+        db = _DropDB(_Msg(seq=5, role="user", content="完全无关的问题"))
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        out = _run(memory.drop_last_turn("cs_fake", expect="华佗的著作有哪些"))
+        assert out == ""
+        assert db.deleted == 0
+
+    def test_empty_session_is_noop(self, monkeypatch):
+        db = _DropDB(None)
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        assert _run(memory.drop_last_turn("cs_fake", expect="随便")) == ""
+        assert db.deleted == 0
+
+
+def _run(coro):
+    import asyncio
+
+    return asyncio.run(coro)

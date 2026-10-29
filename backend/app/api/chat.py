@@ -6,10 +6,12 @@ import asyncio
 import json
 import logging
 import time
+from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
-from sqlalchemy import delete, desc, func, select
+from fastapi.responses import Response, StreamingResponse
+from sqlalchemy import delete, desc, func, or_, select
 
 from app.config import settings
 from app.db import SessionLocal
@@ -73,11 +75,21 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
     session_id = await rag.ensure_session(req.novel_id, req.session_id, req.question)
     logger.info(
-        "chat 会话=%s 入参session=%s 问题=%r",
+        "chat 会话=%s 入参session=%s 重新生成=%s 问题=%r",
         session_id,
         req.session_id,
+        req.regenerate,
         req.question[:30],
     )
+    # 重新生成要在 `prepare()` **之前**删掉上一轮：prepare 会读历史做上下文消歧，
+    # 不先删的话，要重答的这一轮会被当成"上文"塞进 prompt 和检索，
+    # 等于让模型参考着自己上一版答案再答一遍。
+    if req.regenerate:
+        dropped = await memory.drop_last_turn(session_id, expect=req.question)
+        if dropped:
+            logger.info("重新生成：已删除上一轮问答 会话=%s", session_id)
+        else:
+            logger.info("重新生成：没有可删的上一轮，按普通提问处理 会话=%s", session_id)
     messages, result, _, graph_facts, ctx_entities, turns = await rag.prepare(
         req.novel_id, req.question, session_id, use_graph=req.use_graph
     )
@@ -222,28 +234,59 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
 
 @router.get("/chat/sessions")
-async def list_sessions(novel_id: str) -> dict:
+async def list_sessions(novel_id: str, q: str = "") -> dict:
     """列出某本书的会话，按最近活跃排序。
 
     带上 `message_count` 与 `last_message_at`：前端要显示"这个会话有几句、
     最后聊到什么时候"，否则一排会话标题长得都一样（都是首句截断），
     用户分不清哪个是自己要回的那个。
+
+    `q` 非空时按**标题或消息正文**过滤。只搜标题不够用：标题是首句截断，
+    用户记得的往往是"我问过 XX 那件事"，而 XX 可能出现在第三轮。
+    命中正文时额外返回 `hit`（首个命中的提问片段），让用户知道为什么这条被搜出来。
     """
+    q = (q or "").strip()
     async with SessionLocal() as db:
+        stmt = (
+            select(
+                ChatSession,
+                func.count(ChatMessage.id).label("message_count"),
+                func.max(ChatMessage.created_at).label("last_message_at"),
+            )
+            .outerjoin(ChatMessage, ChatMessage.session_id == ChatSession.id)
+            .where(ChatSession.novel_id == novel_id)
+        )
+        if q:
+            like = f"%{q}%"
+            hit_sessions = select(ChatMessage.session_id).where(ChatMessage.content.ilike(like))
+            stmt = stmt.where(
+                or_(ChatSession.title.ilike(like), ChatSession.id.in_(hit_sessions))
+            )
         rows = (
             await db.execute(
-                select(
-                    ChatSession,
-                    func.count(ChatMessage.id).label("message_count"),
-                    func.max(ChatMessage.created_at).label("last_message_at"),
-                )
-                .outerjoin(ChatMessage, ChatMessage.session_id == ChatSession.id)
-                .where(ChatSession.novel_id == novel_id)
-                .group_by(ChatSession.id)
+                stmt.group_by(ChatSession.id)
                 .order_by(desc(func.coalesce(func.max(ChatMessage.created_at), ChatSession.updated_at)))
                 .limit(100)
             )
         ).all()
+
+        # 命中片段：每条会话取**最早**的一条命中消息（提问优先于答案，
+        # 因为"我问过什么"比"它答了什么"更能帮用户认出这是哪个对话）
+        hits: dict[str, str] = {}
+        if q and rows:
+            ids = [s.id for s, _, _ in rows]
+            hit_rows = (
+                await db.execute(
+                    select(ChatMessage.session_id, ChatMessage.content, ChatMessage.role)
+                    .where(ChatMessage.session_id.in_(ids), ChatMessage.content.ilike(f"%{q}%"))
+                    # role 按字母倒序：'user' > 'assistant'，提问排在答案前面。
+                    # 这样 setdefault 取到的第一条命中就是提问（用户更容易认出"我问过什么"）
+                    .order_by(ChatMessage.session_id, ChatMessage.role.desc(), ChatMessage.seq)
+                )
+            ).all()
+            for sid, content, _role in hit_rows:
+                hits.setdefault(sid, content or "")
+
     return {
         "items": [
             {
@@ -260,10 +303,27 @@ async def list_sessions(novel_id: str) -> dict:
                 # 长对话是否已被压缩过：前端据此提示"早期内容已折叠成摘要"
                 "summary_chars": len(s.summary or ""),
                 "summary_seq": int(s.summary_seq or 0),
+                # 搜索命中片段（未搜索时为空串）
+                "hit": _snippet(hits.get(s.id, ""), q) if q else "",
             }
             for s, count, last_at in rows
         ]
     }
+
+
+def _snippet(text: str, q: str, width: int = 28) -> str:
+    """把命中词前后各截一段，避免把整条消息搬到列表里。"""
+    if not text:
+        return ""
+    pos = text.lower().find(q.lower()) if q else -1
+    if pos < 0:
+        return text[: width * 2]
+    start = max(0, pos - width)
+    end = min(len(text), pos + len(q) + width)
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return f"{prefix}{text[start:end]}{suffix}"
+
 
 
 @router.get("/chat/sessions/{session_id}/messages")
@@ -300,6 +360,64 @@ async def session_messages(session_id: str) -> dict:
         ],
         "usage": await memory.session_usage(session_id),
     }
+
+
+@router.get("/chat/sessions/{session_id}/export")
+async def export_session(session_id: str) -> Response:
+    """把一个会话导出成 Markdown 附件。
+
+    为什么是 Markdown 而不是 JSON：用户导出对话是为了**带走结论**（贴进笔记、
+    发给别人、存档），不是做数据备份。JSON 对他没用，而 Markdown 里引用原文、
+    章节号、token 消耗都能顺手带上。
+
+    文件名用 `filename*=UTF-8''` 而不是直接塞中文：RFC 5987 规定的写法，
+    `filename=` 里出现非 ASCII 会让部分浏览器把文件名变成乱码或直接截断。
+    """
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            raise HTTPException(404, "会话不存在")
+        rows = (
+            await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.seq, ChatMessage.id)
+            )
+        ).scalars().all()
+        usage = await memory.session_usage(session_id)
+
+    title = (sess.title or "对话").strip() or "对话"
+    lines = [f"# {title}", ""]
+    meta = [
+        f"共 {len(rows)} 条消息",
+        f"导出时间 {datetime.now(UTC).strftime('%Y-%m-%d %H:%M')} UTC",
+    ]
+    if usage.get("total_tokens"):
+        meta.append(
+            f"消耗 {usage['total_tokens']} tok"
+            f"（入 {usage.get('prompt_tokens', 0)} / 出 {usage.get('completion_tokens', 0)}）"
+        )
+    if usage.get("summary_chars"):
+        meta.append(f"早期 {int(usage.get('summary_seq', 0)) // 2} 轮已压缩为摘要")
+    lines += ["> " + " · ".join(meta), ""]
+
+    for m in rows:
+        who = "我" if m.role == "user" else "小说助手"
+        lines += [f"### {who}", "", (m.content or "").strip(), ""]
+        for i, c in enumerate(m.citations or [], 1):
+            score = c.get("score")
+            score_txt = f" · {float(score):.3f}" if isinstance(score, (int, float)) else ""
+            lines.append(f"> [{i}] 第 {c.get('chapter_no', '?')} 章{score_txt}")
+            lines.append(f"> {c.get('snippet', '')}")
+            lines.append("")
+    body = "\n".join(lines).rstrip() + "\n"
+
+    filename = quote(f"{title}.md")
+    return Response(
+        content=body,
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
+    )
 
 
 @router.patch("/chat/sessions/{session_id}")

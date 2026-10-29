@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Popconfirm, Spin, Typography } from '@douyinfe/semi-ui'
-import { IconEdit, IconPlus, IconDelete } from '@douyinfe/semi-icons'
+import { IconEdit, IconPlus, IconDelete, IconDownload } from '@douyinfe/semi-icons'
 import { api, ChatSession } from '../api/client'
 import { fmtTok } from '../utils/tok'
 
@@ -20,18 +20,25 @@ export default function SessionList({
   sessions,
   activeId,
   loading,
+  query,
+  onQuery,
   onSelect,
   onCreate,
   onRename,
   onDelete,
+  onExport,
 }: {
   sessions: ChatSession[]
   activeId: string
   loading: boolean
+  /** 搜索关键词（受控；父组件负责防抖后请求） */
+  query: string
+  onQuery: (q: string) => void
   onSelect: (id: string) => void
   onCreate: () => void
   onRename: (id: string, title: string) => void
   onDelete: (id: string) => void
+  onExport: (id: string) => void
 }) {
   const [editingId, setEditingId] = useState('')
   const [draft, setDraft] = useState('')
@@ -64,6 +71,18 @@ export default function SessionList({
         />
       </div>
 
+      {/* 搜索框常驻而不是折叠：会话数一多，"找上次那个对话"就是最高频的入口，
+          折叠起来等于没有。空查询时不发请求，本地列表原样展示。 */}
+      <div className="sess-search">
+        <Input
+          size="small"
+          value={query}
+          onChange={(v) => onQuery(String(v))}
+          placeholder="搜索对话标题或内容…"
+          showClear
+        />
+      </div>
+
       <div className="sess-items">
         {loading && (
           <div className="sess-empty">
@@ -73,7 +92,7 @@ export default function SessionList({
         {!loading && sessions.length === 0 && (
           <div className="sess-empty">
             <Typography.Text type="tertiary" size="small">
-              还没有对话记录
+              {query ? '没有匹配的对话' : '还没有对话记录'}
             </Typography.Text>
           </div>
         )}
@@ -113,6 +132,17 @@ export default function SessionList({
                       >
                         <IconEdit size="small" />
                       </span>
+                      <span
+                        className="sess-op"
+                        role="button"
+                        title="导出为 Markdown"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          onExport(s.id)
+                        }}
+                      >
+                        <IconDownload size="small" />
+                      </span>
                       <Popconfirm
                         title="删除该对话？"
                         content="消息记录会一并删除，无法恢复。"
@@ -129,6 +159,9 @@ export default function SessionList({
                       </Popconfirm>
                     </span>
                   </div>
+                  {/* 搜索命中正文时把片段亮出来：标题是首句截断，光看标题
+                      用户认不出"为什么这条被搜出来" */}
+                  {s.hit ? <div className="sess-hit">{highlight(s.hit, query)}</div> : null}
                   <div className="sess-meta">
                     <span>{s.message_count} 条</span>
                     {(s.prompt_tokens || s.completion_tokens) ? (
@@ -153,6 +186,33 @@ export default function SessionList({
       </div>
     </div>
   )
+}
+
+/** 把片段里命中的关键词标出来。
+ *
+ * 后端返回的是纯文本片段（它不该关心前端怎么渲染），高亮在这里做：
+ * 按关键词切段，奇数段是命中部分。大小写不敏感匹配，但保留原文大小写——
+ * 直接 replace 大小写不同就漏标。
+ */
+function highlight(text: string, q: string) {
+  const kw = (q || '').trim()
+  if (!kw) return text
+  const lower = text.toLowerCase()
+  const k = kw.toLowerCase()
+  const out: (string | JSX.Element)[] = []
+  let i = 0
+  let n = 0
+  while (i < text.length) {
+    const pos = lower.indexOf(k, i)
+    if (pos < 0) {
+      out.push(text.slice(i))
+      break
+    }
+    if (pos > i) out.push(text.slice(i, pos))
+    out.push(<b key={n++}>{text.slice(pos, pos + kw.length)}</b>)
+    i = pos + kw.length
+  }
+  return out.length ? out : text
 }
 
 /** 相对时间。超过 7 天给绝对日期 —— "31 天前"没人算得出来。 */

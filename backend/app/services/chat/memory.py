@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, desc, func, select, update
 
 from app.config import settings
 from app.db import SessionLocal
@@ -252,6 +252,51 @@ async def save_answer(
             )
         )
         await db.commit()
+
+
+async def drop_last_turn(session_id: str, expect: str = "") -> str:
+    """删掉会话最后一轮问答（最后一条 user 及其后的消息），返回被删的提问内容。
+
+    「重新生成」用它：不删的话历史里会多一条重复提问 + 两条答案，
+    下一轮提问时模型会看到"同一个问题被问了两次、答了两遍"，
+    上下文直接变脏。
+
+    `expect` 非空时校验被删的提问是否就是它。前端只在最后一条答案上给"重新生成"
+    入口，正常不会错位；但两个标签页同时操作、或点了重新生成又切了会话，
+    就可能删掉别的问题——这种时候宁可不删（返回空串让调用方退回普通提问），
+    也不要静默删掉用户另一段对话。
+
+    返回：被删掉的提问内容；没有可删的回合时返回空串。
+    """
+    if not session_id:
+        return ""
+    async with SessionLocal() as db:
+        last_user = (
+            await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id, ChatMessage.role == "user")
+                .order_by(desc(ChatMessage.seq), desc(ChatMessage.id))
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if last_user is None:
+            return ""
+        if expect and last_user.content.strip() != expect.strip():
+            logger.info(
+                "重新生成跳过：最后一轮提问是 %r，不是 %r 会话=%s",
+                last_user.content[:30],
+                expect[:30],
+                session_id,
+            )
+            return ""
+        seq = int(last_user.seq or 0)
+        await db.execute(
+            delete(ChatMessage).where(
+                ChatMessage.session_id == session_id, ChatMessage.seq >= seq
+            )
+        )
+        await db.commit()
+    return last_user.content
 
 
 async def save_turn(

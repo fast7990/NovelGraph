@@ -30,10 +30,13 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 
 from app.services.graph.extractor import ExtractedEntity
 from app.services.graph.lexicon import canonical_score, is_honorific, is_mergeable_alias
+
+logger = logging.getLogger(__name__)
 
 # 一个连通分量最多合并几个实体。实测：正常情况下同一个人能被抽成 2-4 个名字
 # （本名 / 字 / 号 / 别称），6 已经留了余量；超过就是"链式误并"的征兆。
@@ -80,6 +83,22 @@ class UnionFind:
             self.parent[rb] = ra
 
 
+def _locate(
+    acc: dict[tuple[str, str], MergedEntity], name: str
+) -> tuple[str, str] | None:
+    """按名字找实体 key。同名不同类型时取提及量最大的那个。
+
+    人工别名表只写名字不写类型（写类型对编辑者太啰嗦），所以这里要做一次消歧。
+    """
+    best: tuple[str, str] | None = None
+    for key, m in acc.items():
+        if key[1] != name:
+            continue
+        if best is None or m.mention_count > acc[best].mention_count:
+            best = key
+    return best
+
+
 @dataclass
 class AlignResult:
     entities: list[MergedEntity]
@@ -100,12 +119,17 @@ def align(
     *,
     mentions: dict[str, int] | None = None,
     first_chapter: dict[str, int] | None = None,
+    manual: dict[str, str] | None = None,
 ) -> AlignResult:
     """合并同名与专名别名指向的实体。
 
     `mentions` / `first_chapter` 的 key 是 `f"{type}\x00{name}"`，
     由调用方在同一遍扫描里统计（避免这里再回表）。不传也能跑：
     此时 mention_count 退化成"这个词被多少块抽到"，用来当选规范名的 tie-break 已经够。
+
+    `manual` 是人工别名表（见 `manual_aliases.py`）：`{"武侯": "诸葛亮"}`。
+    它走**独立的合并通道**，不参与 `is_mergeable_alias` 的判定——那些词正是因为
+    被判成封号/尊称才合不上的，再过一遍同样的闸门等于没做。
     """
     mentions = mentions or {}
     first_chapter = first_chapter or {}
@@ -144,6 +168,33 @@ def align(
         uf.add(key)
         size[key] = 1
 
+    # ---------- 人工别名通道 ----------
+    # 在自动合并之前跑：人工指定是**显式意图**，优先级高于模式推断。
+    # 这里刻意不做 is_mergeable_alias 判定 —— 表里的词（武侯/献帝/陈留王）
+    # 正是被判成封号才合不上的，再过一遍同样的闸门等于白写这张表。
+    merged_pairs: list[tuple[str, str, str]] = []
+    for alias, canon in (manual or {}).items():
+        ka = _locate(acc, alias)
+        kb = _locate(acc, canon)
+        if ka is None or kb is None or ka == kb:
+            continue
+        if ka[0] != kb[0]:
+            # 类型不同不合并。"青云"既可能是门派也可能是地名，
+            # 唯一键设计成 (type, name) 就是为了这个。
+            logger.info("人工别名跳过（类型不同）：%s(%s) → %s(%s)", alias, ka[0], canon, kb[0])
+            continue
+        if uf.find(ka) == uf.find(kb):
+            continue
+        uf.parent[uf.find(ka)] = uf.find(kb)
+        merged_pairs.append((canon, alias, "manual"))
+
+    # 人工合并可能一次吃进多个实体，之前的"每个根 1 个成员"不再成立。
+    # 不重算的话，后面自动合并的 MAX_GROUP_SIZE 判定会用过期的计数放行 blob。
+    size = {}
+    for key in acc:
+        root = uf.find(key)
+        size[root] = size.get(root, 0) + 1
+
     # 候选合并对，按"证据强度"从高到低处理。强度用两边提及量的较小值：
     # 一个只出现一次的"孟德"不该把提及八百次的"曹操"拽过去；
     # 2 字专名比 3-4 字更可靠，给一点加成当 tie-break。
@@ -160,7 +211,6 @@ def align(
             cand.append((strength, key, target, alias))
     cand.sort(key=lambda x: -x[0])
 
-    merged_pairs: list[tuple[str, str, str]] = []
     for _strength, ka, kb, alias in cand:
         ra, rb = uf.find(ka), uf.find(kb)
         if ra == rb:
@@ -178,13 +228,27 @@ def align(
     for key, m in acc.items():
         groups.setdefault(uf.find(key), []).append(m)
 
+    # 人工表里写在右边的名字就是这本书的最终规范名，优先级高于字面启发式。
+    # 必要性：「献帝」两个字得分 45，「汉献帝」因封号结尾只有 5——
+    # 纯按 canonical_score 排，合并后主名会变成简称「献帝」，越合越离谱。
+    #
+    # 只取"只被指向、不被并入"的名字：`甲→乙`、`乙→丙` 并存时，乙既是 value
+    # 又是 key，说明它只是中间态，真正的终点是丙。取全部 value 会让规范名
+    # 停在链条中间，越改越乱。
+    manual_map = manual or {}
+    manual_keys = set(manual_map)
+    forced = {v for v in manual_map.values() if v not in manual_keys}
+    if not forced and manual_map:
+        # 全是环（A→B、B→A）时退化成全部 value，至少别丢人工指定
+        forced = set(manual_map.values())
+
     merged: list[MergedEntity] = []
     alias_map: dict[str, str] = {}
     for members in groups.values():
         # 规范名：先看字面结构（本名 > 字 > 号 > 封号），提及量只做 tie-break。
         # 不能反过来——提及量本身被泛称灌过水，拿污染源当裁判没有意义。
         members.sort(key=lambda x: (-canonical_score(x.name), -x.mention_count, -len(x.name)))
-        head = members[0]
+        head = next((m for m in members if m.name in forced), members[0])
 
         total = 0
         first = head.first_chapter

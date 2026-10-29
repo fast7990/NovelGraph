@@ -32,6 +32,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Chunk, Entity, EntityMention, Job, Novel, Relation, new_id
 from app.services.graph import candidates as cand
+from app.services.graph import manual_aliases
 from app.services.graph.aligner import AlignResult, align
 from app.services.graph.extractor import ChunkExtraction, ExtractedEntity, ExtractedRelation, extract_chunk
 from app.services.llm.client import get_llm
@@ -297,7 +298,9 @@ async def _run(job_id: str, novel_id: str, stats: GraphBuildStats, started: floa
 
     # ---------- L3 对齐 ----------
     await _progress(job_id, stage="GRAPH_ALIGNING", progress=88.0)
-    aligned = align(acc.entities)
+    # 人工别名表：规则合不上的封号/简称（武侯→诸葛亮、陈留王→汉献帝）
+    # 只能靠知识指定，见 manual_aliases.py 的说明
+    aligned = align(acc.entities, manual=manual_aliases.aliases_for(novel_id))
     stats.merged_pairs = len(aligned.merged_pairs)
 
     # ---------- mention 回扫 + importance ----------

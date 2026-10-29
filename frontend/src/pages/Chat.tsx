@@ -82,12 +82,19 @@ export default function ChatPage({
   const [sessionId, setSessionId] = useState('')
   const [sessions, setSessions] = useState<ChatSession[]>([])
   const [sessLoading, setSessLoading] = useState(false)
+  // 搜索关键词：输入即改 state（受控），真正发请求走 300ms 防抖 effect，
+  // 否则每敲一个字就是一个请求，中文输入法下几乎全是废请求
+  const [sessQuery, setSessQuery] = useState('')
   const [loading, setLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   // 当前会话 id 用 ref 同步一份：state 更新是异步的，
   // "新建会话后立刻提问"这种时序下 state 还没落地，发出去的就是空 session_id，
   // 后端会另建一个会话，上下文当场断掉。ref 是同步的，能避免这个竞态。
   const sessionRef = useRef('')
+  // 搜索词的同步副本：createSession / deleteSession / 答完刷新 这些回调里
+  // 都要"保持当前过滤条件再刷一次列表"，但它们不该为了读到搜索词而重建
+  // （重建会连带触发首屏 effect，把界面清一遍）
+  const queryRef = useRef('')
 
   useEffect(() => {
     api.novels().then((r) => {
@@ -99,23 +106,27 @@ export default function ChatPage({
   }, [])
 
   // ---- 会话列表：按书加载 ----
-  const loadSessions = useCallback(async (nid: string): Promise<ChatSession[]> => {
-    if (!nid) {
-      setSessions([])
-      return []
-    }
-    setSessLoading(true)
-    try {
-      const r = await api.chatSessions(nid)
-      setSessions(r.items || [])
-      return r.items || []
-    } catch {
-      setSessions([])
-      return []
-    } finally {
-      setSessLoading(false)
-    }
-  }, [])
+  // `q` 有值时后端会按标题 + 正文过滤；不传就取全量
+  const loadSessions = useCallback(
+    async (nid: string, q = ''): Promise<ChatSession[]> => {
+      if (!nid) {
+        setSessions([])
+        return []
+      }
+      setSessLoading(true)
+      try {
+        const r = await api.chatSessions(nid, q)
+        setSessions(r.items || [])
+        return r.items || []
+      } catch {
+        setSessions([])
+        return []
+      } finally {
+        setSessLoading(false)
+      }
+    },
+    [],
+  )
 
   // 当前会话写进 URL：刷新、分享链接、浏览器前进后退都能回到原对话。
   // 用 replaceState 而不是 pushState —— 切会话不该把历史栈塞满。
@@ -191,7 +202,7 @@ export default function ChatPage({
     sessionRef.current = ''
     setSessionId('')
     void (async () => {
-      const list = await loadSessions(novelId)
+      const list = await loadSessions(novelId, queryRef.current)
       const want = new URLSearchParams(window.location.search).get('session')
       if (!novelId || !want) return
       if (!list.some((s) => s.id === want)) {
@@ -203,11 +214,25 @@ export default function ChatPage({
     })()
   }, [novelId, loadSessions, openSession, syncUrl])
 
+  // 搜索防抖：300ms 内的连续输入只发一次请求。
+  // 首次跳过 —— 上面那个 effect 已经用同一份 query 拉过了，不跳过会开屏双请求。
+  const queryInited = useRef(false)
+  useEffect(() => {
+    if (!queryInited.current) {
+      queryInited.current = true
+      return
+    }
+    const t = window.setTimeout(() => {
+      void loadSessions(novelId, sessQuery)
+    }, 300)
+    return () => window.clearTimeout(t)
+  }, [sessQuery, novelId, loadSessions])
+
   const createSession = useCallback(async () => {
     if (!novelId) return
     try {
       const s = await api.chatSessionCreate(novelId)
-      await loadSessions(novelId)
+      await loadSessions(novelId, queryRef.current)
       await openSession(s.id)
     } catch {
       // 忽略：下一条消息会隐式建会话
@@ -218,7 +243,7 @@ export default function ChatPage({
     async (id: string, title: string) => {
       try {
         await api.chatSessionRename(id, title)
-        await loadSessions(novelId)
+        await loadSessions(novelId, queryRef.current)
       } catch {
         // 忽略
       }
@@ -246,20 +271,22 @@ export default function ChatPage({
         setUsageMap({})
         setActiveId('')
       }
-      await loadSessions(novelId)
+      await loadSessions(novelId, queryRef.current)
     },
     [novelId, loadSessions, syncUrl],
   )
 
-  const send = async (text: string) => {
+  const send = async (text: string, opts?: { regenerate?: boolean }) => {
     const q = (text || '').trim()
     if (!q || !novelId || loading) return
+    const regenerate = !!opts?.regenerate
 
     setLoading(true)
     const aid = `a-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
     setActiveId(aid)
     setActiveIdx(-1)
-    // 用户消息由 Chat 内部追加并通过 onChatsChange 回传，这里只补占位的助手消息
+    // 用户消息由 Chat 内部追加并通过 onChatsChange 回传，这里只补占位的助手消息。
+    // 重新生成走的是程序化调用、不经过输入框，所以不会多出一条用户消息。
     setChats((prev) => [
       ...prev,
       { id: aid, role: 'assistant', content: '', createAt: Date.now(), status: 'loading' as const },
@@ -291,7 +318,12 @@ export default function ChatPage({
     try {
       await streamSSE(
         '/api/v1/chat',
-        { novel_id: novelId, question: q, session_id: sessionRef.current || null },
+        {
+          novel_id: novelId,
+          question: q,
+          session_id: sessionRef.current || null,
+          regenerate,
+        },
         (event, data) => {
           if (event === 'meta') {
             setCiteMap((prev) => ({ ...prev, [aid]: data.citations || [] }))
@@ -368,7 +400,7 @@ export default function ChatPage({
         ),
       )
       // 落库完成 → 刷新会话列表（标题/条数/时间都变了）
-      void loadSessions(novelId)
+      void loadSessions(novelId, queryRef.current)
     } catch (e: any) {
       const aborted = e?.name === 'AbortError'
       setChats((prev) =>
@@ -394,6 +426,44 @@ export default function ChatPage({
 
   const citations = citeMap[activeId] || []
   const retMode = modeMap[activeId]
+
+  // 最后一条答案是唯一能"重新生成"的目标：更早的答案已被后续对话引用，
+  // 重答它而不重答后面的问题，上下文会自相矛盾。
+  const lastAnsId = (() => {
+    for (let i = chats.length - 1; i >= 0; i--) {
+      if (chats[i].role === 'assistant') return String(chats[i].id || '')
+    }
+    return ''
+  })()
+
+  /** 重新生成一条答案：删掉它、用同一个问题重发，历史里不会多出一轮。 */
+  const regenerate = (aid: string) => {
+    if (loading) return
+    const idx = chats.findIndex((m) => String(m.id || '') === aid)
+    if (idx < 0) return
+    let q = ''
+    for (let i = idx - 1; i >= 0; i--) {
+      if (chats[i].role === 'user') {
+        q = String(chats[i].content || '')
+        break
+      }
+    }
+    if (!q.trim()) return
+    // 截到这条答案之前：它后面的消息理论上不存在（只有最后一条才有入口），
+    // 但万一有，也一并丢掉——否则会出现"答案 A 被换掉、基于 A 的追问还留着"
+    setChats((prev) => prev.slice(0, idx))
+    setCiteMap((prev) => {
+      const next = { ...prev }
+      delete next[aid]
+      return next
+    })
+    setUsageMap((prev) => {
+      const next = { ...prev }
+      delete next[aid]
+      return next
+    })
+    void send(q, { regenerate: true })
+  }
 
   return (
     <>
@@ -429,10 +499,20 @@ export default function ChatPage({
               sessions={sessions}
               activeId={sessionId}
               loading={sessLoading}
+              query={sessQuery}
+              onQuery={(v) => {
+                queryRef.current = v
+                setSessQuery(v)
+              }}
               onSelect={(id) => void openSession(id)}
               onCreate={() => void createSession()}
               onRename={(id, t) => void renameSession(id, t)}
               onDelete={(id) => void deleteSession(id)}
+              onExport={(id) => {
+                // 直接跳 URL 让浏览器按 Content-Disposition 下载，
+                // 不用 fetch+Blob（那还得自己处理中文文件名）
+                window.location.href = api.chatSessionExportUrl(id)
+              }}
             />
           </div>
           <div className="chat-main">
@@ -478,11 +558,13 @@ export default function ChatPage({
                   const mem = mid ? memMap[mid] : undefined
                   const us = mid ? usageMap[mid] : undefined
                   if (message?.role !== 'assistant') return defaultContent
-                  // 有思考面板 / 引用 / 用量三者之一才走自定义渲染
+                  // 有思考面板 / 引用 / 用量 / 重新生成入口，任一成立就走自定义渲染。
+                  // 最后一条答案必须走这条分支：否则它的"重新生成"按钮渲染不出来。
                   const hasRound = (us?.round?.total_tokens || 0) > 0
                   const hasUsage =
                     !!us && (hasRound || (us.total?.total_tokens || 0) > 0)
-                  if (!panel && !cs?.length && !hasUsage) return defaultContent
+                  const showRegen = mid === lastAnsId && !loading && message.status !== 'loading'
+                  if (!panel && !cs?.length && !hasUsage && !showRegen) return defaultContent
                   return (
                     <div className="msg-body">
                       {panel}
@@ -555,6 +637,18 @@ export default function ChatPage({
                               资料 {i + 1} · 第 {c.chapter_no} 章
                             </span>
                           ))}
+                        </div>
+                      )}
+                      {showRegen && (
+                        <div className="msg-ops">
+                          <span
+                            className="msg-op"
+                            role="button"
+                            title="用同一个问题重答一遍，不会多出一条历史"
+                            onClick={() => regenerate(mid)}
+                          >
+                            ⟳ 重新生成
+                          </span>
                         </div>
                       )}
                     </div>

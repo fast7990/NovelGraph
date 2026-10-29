@@ -134,3 +134,63 @@ def test_same_name_different_type_not_merged():
     ]
     result = align(ents)
     assert len(result.entities) == 2
+
+
+# ---------- 人工别名通道 ----------
+# 规则天然覆盖不到的一类：封号/简称（武侯、献帝、陈留王）。
+# 这些词被 is_honorific / TITLE_SUFFIXES 判掉，永远进不了别名表，
+# 只能靠人工表显式指定。实测《三国》：诸葛亮 2432 次提及，旁边挂着
+# 武侯(46) + 诸葛武侯(6) 两个孤立实体；汉献帝(12)/献帝(40)/陈留王(24) 三人各算各的。
+
+
+def test_manual_alias_merges_title():
+    ents = [_ent("诸葛亮", "孔明"), _ent("武侯"), _ent("诸葛武侯")]
+    # 不加人工表时合不上：武侯是封号，进不了合并通道
+    plain = align(ents)
+    assert len(plain.entities) == 3
+
+    manual = align(ents, manual={"武侯": "诸葛亮", "诸葛武侯": "诸葛亮"})
+    assert len(manual.entities) == 1
+    boss = manual.entities[0]
+    assert boss.name == "诸葛亮"
+    assert "武侯" in boss.aliases
+    assert "诸葛武侯" in boss.aliases
+    assert boss.mention_count == 3
+    # 关系回填要靠 alias_map 把旧名映射到规范名
+    assert manual.canonical("武侯") == "诸葛亮"
+
+
+def test_manual_forces_canonical_name():
+    """人工表右边的名字必须当规范名。
+
+    「献帝」两个字 canonical_score=45，「汉献帝」因封号结尾只有 5——
+    纯按字面启发式排，合并后主名会变成简称「献帝」，越合越离谱。
+    """
+    ents = [_ent("献帝"), _ent("汉献帝", "汉帝")]
+    result = align(ents, manual={"献帝": "汉献帝"})
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "汉献帝"
+    assert "献帝" in result.entities[0].aliases
+
+
+def test_manual_skips_unknown_and_cross_type():
+    ents = [_ent("诸葛亮", "孔明"), _ent("许都", etype="Location")]
+    # 表里写了库里没有的名字 → 静默跳过，不能凭空造实体
+    out = align(ents, manual={"不存在的人": "诸葛亮"})
+    assert len(out.entities) == 2
+    # 类型不同不合并（同名不同类型是合法设计，见 test_same_name_different_type_not_merged）
+    out2 = align(ents, manual={"许都": "诸葛亮"})
+    assert len(out2.entities) == 2
+
+
+def test_manual_chain_does_not_cascade():
+    """人工表不做链式推导：A→B、B→C 不该得到 A→C。
+
+    链式推导正是 v1.10 blob 事故的成因，人工表必须一目了然。
+    """
+    ents = [_ent("甲"), _ent("乙"), _ent("丙")]
+    result = align(ents, manual={"甲": "乙", "乙": "丙"})
+    # 甲并入乙、乙并入丙 —— 这是两次显式指定的结果，三个人确实并成了一组，
+    # 但规范名必须是最右边出现过的那个（丙），而不是中间态
+    assert len(result.entities) == 1
+    assert result.entities[0].name == "丙"

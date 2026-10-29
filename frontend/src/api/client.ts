@@ -106,6 +106,8 @@ export type ChatSession = {
   /** 长对话是否已被压缩成摘要（>0 表示早期内容已折叠） */
   summary_chars?: number
   summary_seq?: number
+  /** 搜索命中的正文片段（未搜索时为空串）；标题命中时为空 */
+  hit?: string
 }
 
 export type ChatHistoryMessage = {
@@ -181,8 +183,11 @@ export const api = {
     }).then((r) => j<any>(r)),
 
   // ---- 会话（上下文记忆）----
-  chatSessions: (novelId: string) =>
-    fetch(`${BASE}/chat/sessions?novel_id=${novelId}`).then((r) => j<{ items: ChatSession[] }>(r)),
+  chatSessions: (novelId: string, q?: string) => {
+    const qs = new URLSearchParams({ novel_id: novelId })
+    if (q) qs.set('q', q)
+    return fetch(`${BASE}/chat/sessions?${qs}`).then((r) => j<{ items: ChatSession[] }>(r))
+  },
   chatSessionCreate: (novelId: string) =>
     fetch(`${BASE}/chat/sessions?novel_id=${novelId}`, { method: 'POST' }).then((r) => j<ChatSession>(r)),
   chatSessionMessages: (sessionId: string) =>
@@ -200,6 +205,9 @@ export const api = {
         }
       }>(r),
     ),
+  /** 导出会话为 Markdown：直接给 URL 让浏览器按 Content-Disposition 下载，
+      不用 fetch + Blob（那样得自己处理文件名里的中文编码）。 */
+  chatSessionExportUrl: (sessionId: string) => `${BASE}/chat/sessions/${sessionId}/export`,
   chatSessionRename: (sessionId: string, title: string) =>
     fetch(`${BASE}/chat/sessions/${sessionId}`, {
       method: 'PATCH',
