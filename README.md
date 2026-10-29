@@ -1,4 +1,4 @@
-# 长篇小说 RAG 中台 · P0 + P1
+# NovelGraph · 长篇小说 RAG 中台 · P0 + P1
 
 原始文本 → 解析分章 → 父子切块 → 本地向量化 → **PostgreSQL + pgvector** → 混合检索（向量 + 词法 + RRF + 精排）→ RAG 问答（360 网关 glm-5）。
 

@@ -102,7 +102,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="长篇小说 RAG 中台",
+    title="NovelGraph",
     version="0.1.0",
     description="原始文本 → PostgreSQL + pgvector → 混合检索 → RAG 问答；知识图谱在 P1 接入",
     lifespan=lifespan,

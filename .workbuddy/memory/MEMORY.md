@@ -25,3 +25,7 @@
 ## 工作习惯
 - 性能问题先用日志量化 QPS、按客户端端口归因，再改代码；不猜
 - 文档 `docs/架构设计说明书.md` 与 `docs/architecture.html` 必须跟着实现同步改，版本号递增
+
+## 项目命名
+- 英文名 **NovelGraph**（2026-10-29 由二月指定；原目录名是拼音 jiansuoandzhishitupi）。显示名 / 标题 / 构建配置 name 已统一替换。
+- 磁盘目录名 `D:/project/jiansuoandzhishitupi` 暂未改（重命名会切断当前 WorkBuddy 会话工作区）；文档内路径引用已预改为 `novelgraph/`。
