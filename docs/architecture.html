@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.17</div>
+  <div class="eyebrow">Technical Architecture · v1.18</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -263,7 +263,11 @@
   </div>
   <div class="note">
     <h3>⑧ 画出来的按钮不是功能</h3>
-    <p>Semi 的 Chat <b>不传回调也照样</b>把复制 / 赞 / 踩 / 刷新 / 删除五个图标画出来，点下去全是空转——比不显示更糟，用户分不清"坏了"还是"没做"。假删除的根因是<b>临时 id</b>：界面用的是本地 <span class="k">a-&lt;ts&gt;</span>，服务端的 <span class="k">cm_xxx</span> 落库时才生成，拿占位 id 调删除接口必然 404，而 Semi 会先把消息从自己的列表摘掉，看起来就像删成功了。修法是 <span class="k">done</span> 事件回传 <span class="k">message_id</span> 让界面换成真 id。另外，字体大小不一致的真相不是"两边样式不同"——<span class="k">p</span> 两侧都是 14px，是 <span class="k">li</span> 漏在了 Typography 外面，继承 body 的 16px，于是回答一用编号列表就整体大一号。</p>
+    <p>Semi 的 Chat <b>不传回调也照样</b>把复制 / 赞 / 踩 / 刷新 / 删除五个图标画出来，点下去全是空转——比不显示更糟，用户分不清"坏了"还是"没做"。假删除的根因是<b>临时 id</b>：界面用的是本地 <span class="k">a-&lt;ts&gt;</span>，服务端的 <span class="k">cm_xxx</span> 落库时才生成，拿占位 id 调删除接口必然 404，而 Semi 会先把消息从自己的列表摘掉，看起来就像删成功了。另外，字体大小不一致的真相不是"两边样式不同"——<span class="k">p</span> 两侧都是 14px，是 <span class="k">li</span> 漏在了 Typography 外面，继承 body 的 16px，于是回答一用编号列表就整体大一号。</p>
+  </div>
+  <div class="note warn">
+    <h3>⑨ 流式是后端的事，上不上屏是组件的事</h3>
+    <p>后端一直逐帧推 <span class="k">delta</span>（40~90ms 一帧），用户却说"不像流式"。原因在 <span class="k">ChatBoxContent</span> 的一个分支：<span class="k">status==='loading'</span> 时它只画一个转圈点、把 <span class="k">content</span> 整个丢掉——我们却把 <span class="k">loading</span> 挂到整段答完。字节在 state 里一帧帧涨，屏幕上一个字不动，<span class="k">done</span> 一到整篇砸下来。修法是首个 delta 切 <span class="k">incomplete</span>（不是 complete：操作图标行按 <span class="k">status!==loading &amp;&amp; status!==incomplete</span> 显隐）。第二个坑是<span class="k">末尾换 id</span>：Semi 按 <span class="k">key={id}</span> 渲染，换 id 就是卸载重建，正好在答案铺满一屏时重建，先空一帧再出现。改为开流前预建一条空回答、id 随 <span class="k">meta</span> 下发，前端在正文 0 字时完成替换。</p>
   </div>
 </div>
 
@@ -771,7 +775,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.17</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.18</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

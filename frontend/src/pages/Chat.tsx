@@ -339,6 +339,18 @@ export default function ChatPage({
         },
         (event, data) => {
           if (event === 'meta') {
+            // 在这里就把临时 id 换成服务端预建的 id。换的时机很关键：
+            // 此刻正文还是 0 个字，Semi 按 `key={item.id}` 重新挂载气泡时
+            // 没有任何内容会丢；等 done 再换的话，正好是"答完那一刻"重建，
+            // 正文会先空一帧再出现，看起来像闪了一下。
+            const realId = String(data.message_id || '')
+            if (realId && realId !== answerId) {
+              const prevId = answerId
+              setChats((prev) => prev.map((m) => (m.id === prevId ? { ...m, id: realId } : m)))
+              setActiveId((cur) => (cur === prevId ? realId : cur))
+              moveKey(prevId, realId)
+              answerId = realId
+            }
             setCiteMap((prev) => ({ ...prev, [answerId]: data.citations || [] }))
             setModeMap((prev) => ({ ...prev, [answerId]: (data.mode || 'hybrid') as RetrievalMode }))
             setRetMap((prev) => ({
@@ -381,9 +393,26 @@ export default function ChatPage({
             }
             {
               const key = answerId
+              const piece = String(data.text || '')
               setChats((prev) =>
                 prev.map((m) =>
-                  m.id === key ? { ...m, content: String(m.content || '') + data.text } : m,
+                  m.id === key
+                    ? {
+                        ...m,
+                        content: String(m.content || '') + piece,
+                        // **正文能不能边流边显示，全看这一行。**
+                        // Semi 的 ChatBoxContent 拿 `status === 'loading'` 当作
+                        // "还在等第一段内容"，这时它只画一个转圈点、把 content
+                        // 整个丢掉不渲染。我们此前一直挂 loading 到整段答完，
+                        // 于是 content 一到就累加进 state、却一个字都上不了屏，
+                        // 直到 done 才一次性铺出来——用户看到的就是"不是流式"。
+                        // 首字到达即切 incomplete：内容立刻可见，而操作图标行
+                        // 仍按"未完成"隐藏（ChatBoxAction 只认 complete）。
+                        status: (
+                          m.status === 'loading' ? 'incomplete' : m.status
+                        ) as Message['status'],
+                      }
+                    : m,
                 ),
               )
             }
@@ -394,8 +423,10 @@ export default function ChatPage({
             // 又往旧 key 写一次，把刚清掉的临时 id 重新塞回 Map
             stopFlush()
             flush()
-            // 换成服务端真实 id：本地这个 `a-<ts>-<rand>` 只活在界面里，
-            // 拿它去调「点赞 / 删除」后端只会回 404（这就是"假删除"的成因）
+            // 兜底：正常情况下 meta 阶段已经换过 id，这里 realId 与 answerId
+            // 相同、整段跳过。留着是为了预建失败（meta.message_id 为空）的
+            // 退化路径 —— 那时仍然只能在这轮结束时补换，虽然会闪一下，
+            // 但总比"点赞 / 删除必定 404"强
             const realId = String(data.message_id || '')
             if (realId && realId !== answerId) {
               // 必须把旧 id 存成常量再进 updater。updater 是在 React 渲染阶段

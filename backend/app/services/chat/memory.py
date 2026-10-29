@@ -232,26 +232,25 @@ async def save_question(session_id: str, question: str) -> int:
     return seq
 
 
-async def save_answer(
-    session_id: str,
-    seq: int,
-    answer: str,
-    citations: list[dict],
-) -> str:
-    """把回答接在提问后面存。seq 由 save_question 给出，保证同回合严格有序。
+async def create_answer(session_id: str, seq: int) -> str:
+    """先建一条**空**的助手消息，返回它的真实主键。
 
-    返回新消息的主键：前端在流结束前用的是本地临时 id（`a-<ts>-<rand>`），
-    拿它去调「点赞 / 删除消息」只会得到 404——必须在 `done` 事件里把服务端
-    真实 id 交回去，前端才有可操作的对象。
+    为什么要提前建、而不是等答完再插：前端在流开始前只有一个本地临时 id
+    （`a-<ts>-<rand>`），拿它调「点赞 / 删除」必 404；以前的解法是在 `done`
+    事件里把 id 换掉，但 Semi 用 `key={item.id}` 渲染消息，换 id 等于卸载重建，
+    答完那一瞬间正文会闪一下（先空一帧再出现）。
+
+    改成开流前就把 id 交给前端（随 `meta` 下发）：切换发生在正文还是 0 个字的
+    时候，视觉上什么都不会丢，`done` 也不需要再换 id。
+
+    代价是生成彻底失败时库里会留一条空消息，由 `fill_answer()` 负责删掉。
     """
-    if not answer.strip():
-        return ""
     async with SessionLocal() as db:
         msg = ChatMessage(
             session_id=session_id,
             role="assistant",
-            content=answer,
-            citations=citations or [],
+            content="",
+            citations=[],
             seq=seq + 1,
         )
         db.add(msg)
@@ -260,6 +259,44 @@ async def save_answer(
         await db.flush()
         mid = msg.id
         await db.commit()
+    return mid
+
+
+async def fill_answer(message_id: str, answer: str, citations: list[dict]) -> None:
+    """把生成结果写回 `create_answer()` 预建的那条消息。
+
+    `answer` 为空表示这一轮什么也没产出（异常 / 客户端立刻断开）：直接删掉
+    预建的空壳。留着会让回放里出现一个空气泡，摘要与轮次配对也会多算一轮。
+    """
+    async with SessionLocal() as db:
+        msg = await db.get(ChatMessage, message_id)
+        if msg is None:
+            return
+        if not (answer or "").strip():
+            await db.delete(msg)
+            await db.commit()
+            return
+        msg.content = answer
+        msg.citations = citations or []
+        await db.commit()
+
+
+async def save_answer(
+    session_id: str,
+    seq: int,
+    answer: str,
+    citations: list[dict],
+) -> str:
+    """一次存完整回答（预建 + 填充），返回消息 id；空回答返回空串。
+
+    SSE 主链路不走这里 —— 它需要在开流前就拿到 id，所以拆成
+    `create_answer()` + `fill_answer()` 两步。这个组合版留给
+    `save_turn()`（测试与离线补录）用。
+    """
+    if not answer.strip():
+        return ""
+    mid = await create_answer(session_id, seq)
+    await fill_answer(mid, answer, citations)
     return mid
 
 

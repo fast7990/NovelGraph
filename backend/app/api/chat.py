@@ -30,22 +30,29 @@ def _sse(event: str, data: dict) -> str:
 
 
 async def _persist_and_housekeep(
-    session_id: str, qseq: int, answer: str, cites: list[dict]
+    session_id: str,
+    qseq: int,
+    message_id: str,
+    answer: str,
+    cites: list[dict],
 ) -> dict:
     """存回答 → 结掉这一轮的 token 账 → 视情况压缩早期回合。
 
     三件事绑在一起，是因为它们都以"这一轮已落库"为前提：摘要要能看到最新消息，
     用量要包含这一轮的请求。任一步失败都不该连累另外两步，所以各自兜住。
 
-    返回 `{"round": 本轮用量, "total": 会话累计, "message_id": 新消息 id}`，
-    供 `done` 事件回传前端——前端要在这轮答完的瞬间就能显示消耗，不该再发
-    一次列表请求去等落账；`message_id` 则是让"点赞 / 删除这条答案"有真对象
-    可指（前端手里的 id 是本地临时 id，拿去调接口只会 404）。
+    `message_id` 是开流前 `create_answer()` 预建的那条空消息；它可能为空
+    （预建失败），那时退化回"这轮结束时新建一条"，不能因为一次插入失败
+    就把回答丢掉。
+
+    返回 `{"round": 本轮用量, "total": 会话累计, "message_id": 消息 id}`。
     """
     round_usage: dict = {}
-    message_id = ""
     try:
-        message_id = await memory.save_answer(session_id, qseq, answer, cites)
+        if message_id:
+            await memory.fill_answer(message_id, answer, cites)
+        else:
+            message_id = await memory.save_answer(session_id, qseq, answer, cites)
     except Exception:  # noqa: BLE001
         logger.exception("落库失败 会话=%s", session_id)
     try:
@@ -110,11 +117,23 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         # 先落提问：客户端可能在生成中途刷新/关页，那时服务端生成器会被取消，
         # 走不到后面的落库代码。先存这一半，至少"问过什么"不会丢。
         qseq = await memory.save_question(session_id, req.question)
+        # 答案的 id 也在开流前就建好。前端拿到它之后 UI 里就只有一套 id，
+        # 答完不用再换 —— 换 id 会让 Semi 的 key 变掉、正文重挂载闪一下。
+        answer_mid = ""
+        try:
+            answer_mid = await memory.create_answer(session_id, qseq)
+        except Exception:  # noqa: BLE001
+            logger.exception("预建回答消息失败 会话=%s，退化到结束时新建", session_id)
 
         yield _sse(
             "meta",
             {
                 "session_id": session_id,
+                # 真实的消息 id。前端发送时手里只有本地临时 `a-<ts>-<rand>`，
+                # 靠这个在**正文还没开始**的时候换成服务端 id：
+                # 换成之后 "点赞 / 删除这条答案" 有真对象可指，也不会因为
+                # key 变化把已经流出来的正文重新挂载一次。
+                "message_id": answer_mid,
                 "citations": citations,
                 "degraded": result.degraded,
                 "mode": result.mode,
@@ -149,7 +168,9 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             if saved or not answer.strip():
                 return
             saved = True
-            task = asyncio.create_task(_persist_and_housekeep(session_id, qseq, answer, cites))
+            task = asyncio.create_task(
+                _persist_and_housekeep(session_id, qseq, answer_mid, answer, cites)
+            )
 
             def _done(t: asyncio.Task) -> None:
                 if t.cancelled():
@@ -201,12 +222,23 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         answer = "".join(buffer)
         usage_info: dict = {}
         if answer.strip():
-            usage_info = await _persist_and_housekeep(session_id, qseq, answer, citations)
+            usage_info = await _persist_and_housekeep(session_id, qseq, answer_mid, answer, citations)
             saved = True
         else:
             # 空回答也要把用量与摘要推进掉，否则这一轮的 token 和压缩机会都白丢
             await memory.flush_usage(session_id)
-            usage_info = {"round": {}, "total": await memory.session_usage(session_id)}
+            # 预建的空壳必须删掉：留着会在回放里变成一个空气泡，
+            # 还会让摘要按"多了一轮回答"去配对
+            if answer_mid:
+                try:
+                    await memory.fill_answer(answer_mid, "", [])
+                except Exception:  # noqa: BLE001
+                    logger.warning("清理空回答失败 id=%s", answer_mid, exc_info=True)
+            usage_info = {
+                "round": {},
+                "total": await memory.session_usage(session_id),
+                "message_id": answer_mid,
+            }
         logger.info(
             "chat 落库 会话=%s 回答长度=%d 引用=%d token=%s",
             session_id,
@@ -223,9 +255,10 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "reasoning_ms": reasoning_ms,
                 "ttft_ms": ttft_ms,
                 "elapsed_ms": elapsed(),
-                # 服务端真实的消息 id。前端发送时手里只有本地临时 id，
-                # 不带回去的话，这条答案的「点赞 / 删除」注定 404
-                "message_id": usage_info.get("message_id") or "",
+                # 同一个 id 在 meta 里已经下发过，这里再带一次是兜底：
+                # 万一前端是从中途接上来的（预建失败、或换了客户端），
+                # 靠它仍然能把这条答案对上真实记录
+                "message_id": usage_info.get("message_id") or answer_mid,
                 # 本轮的 token 消耗与会话累计：前端在答案下方直接显示，
                 # 用户不用去侧栏找、也不用等列表刷新。
                 # 只挑这两个子字段，别把 message_id 混进用量结构里
