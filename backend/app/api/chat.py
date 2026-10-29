@@ -27,6 +27,28 @@ def _sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
+async def _persist_and_housekeep(
+    session_id: str, qseq: int, answer: str, cites: list[dict]
+) -> None:
+    """存回答 → 结掉这一轮的 token 账 → 视情况压缩早期回合。
+
+    三件事绑在一起，是因为它们都以"这一轮已落库"为前提：摘要要能看到最新消息，
+    用量要包含这一轮的请求。任一步失败都不该连累另外两步，所以各自兜住。
+    """
+    try:
+        await memory.save_answer(session_id, qseq, answer, cites)
+    except Exception:  # noqa: BLE001
+        logger.exception("落库失败 会话=%s", session_id)
+    try:
+        await memory.flush_usage(session_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("用量落账失败 会话=%s", session_id, exc_info=True)
+    try:
+        await memory.maybe_summarize(session_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("会话摘要调度失败 会话=%s", session_id, exc_info=True)
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     if not req.question.strip():
@@ -102,7 +124,7 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             if saved or not answer.strip():
                 return
             saved = True
-            task = asyncio.create_task(memory.save_answer(session_id, qseq, answer, cites))
+            task = asyncio.create_task(_persist_and_housekeep(session_id, qseq, answer, cites))
 
             def _done(t: asyncio.Task) -> None:
                 if t.cancelled():
@@ -116,7 +138,12 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         finished = False
         try:
             async for kind, text in llm.stream_events(
-                messages, temperature=0.6, max_tokens=settings.chat_max_tokens
+                messages,
+                temperature=0.6,
+                max_tokens=settings.chat_max_tokens,
+                # 用会话 id 做计量 tag：流式请求不主动要 usage 的话，网关不会回，
+                # 问答的 token 消耗就永远是 0
+                usage_tag=session_id,
             ):
                 if await request.is_disconnected():
                     logger.info("客户端断开，中止生成")
@@ -148,8 +175,11 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
         answer = "".join(buffer)
         if answer.strip():
-            await memory.save_answer(session_id, qseq, answer, citations)
+            await _persist_and_housekeep(session_id, qseq, answer, citations)
             saved = True
+        else:
+            # 空回答也要把用量与摘要推进掉，否则这一轮的 token 和压缩机会都白丢
+            await memory.flush_usage(session_id)
         logger.info(
             "chat 落库 会话=%s 回答长度=%d 引用=%d", session_id, len(answer), len(citations)
         )
@@ -204,6 +234,13 @@ async def list_sessions(novel_id: str) -> dict:
                 "updated_at": s.updated_at,
                 "message_count": int(count or 0),
                 "last_message_at": last_at,
+                # 会话成本台账：问答的 token 消耗落在这里（图谱构建记在 job.stats 上）
+                "prompt_tokens": int(s.prompt_tokens or 0),
+                "completion_tokens": int(s.completion_tokens or 0),
+                "llm_calls": int(s.llm_calls or 0),
+                # 长对话是否已被压缩过：前端据此提示"早期内容已折叠成摘要"
+                "summary_chars": len(s.summary or ""),
+                "summary_seq": int(s.summary_seq or 0),
             }
             for s, count, last_at in rows
         ]

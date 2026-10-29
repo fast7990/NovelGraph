@@ -99,6 +99,13 @@ export type ChatSession = {
   updated_at: string
   message_count: number
   last_message_at: string | null
+  /** 问答侧的 token 台账（图谱构建记在 job.stats 上，不在这里） */
+  prompt_tokens?: number
+  completion_tokens?: number
+  llm_calls?: number
+  /** 长对话是否已被压缩成摘要（>0 表示早期内容已折叠） */
+  summary_chars?: number
+  summary_seq?: number
 }
 
 export type ChatHistoryMessage = {

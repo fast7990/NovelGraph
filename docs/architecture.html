@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.13</div>
+  <div class="eyebrow">Technical Architecture · v1.14</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -252,6 +252,10 @@
   <div class="note ok">
     <h3>⑤ 记忆要进 prompt，更要进检索</h3>
     <p>多轮对话只把历史塞进 prompt 是不够的：追问「他后来怎么样了」里没有任何可检索实体，词法通道直接空，向量只能靠「后来/怎么样」硬凑——实测召回第 79 回（0.31 分），正确答案在第 78 回。所以历史里提取实体后要<b>再走一路召回</b>，与原问句 RRF 平权融合：词法召回 13→50，top1 命中正确章节。实体候选必须过<span class="k">实体表校验</span>，否则正则毛刺会污染 query。</p>
+  </div>
+  <div class="note warn">
+    <h3>⑥ 上下文要压缩，账要能对上</h3>
+    <p>「截断最近 N 轮」会扔掉链式指代的锚点（第 20 轮的「他」依赖第 3 轮引入的人名）。改用<b>滚动摘要</b>：旧回合压成自然语言常驻，最近 3 轮留原文，<span class="k">summary_seq</span> 记录已覆盖到第几条消息——没有它就不知道哪些压过，会重复压缩重复计费。成本侧有更隐蔽的坑：网关对一次短回答推了 <b>3 帧</b> usage，不取最后一帧会把 token 算成 3 倍（2942→1465）。</p>
   </div>
 </div>
 
@@ -759,7 +763,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.13</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.14</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

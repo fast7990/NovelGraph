@@ -72,6 +72,8 @@ class LLMClient:
         # 不在全局累加，是因为同一个 client 实例会被并发任务共用，
         # 全局计数会把两本书的消耗混在一起，账单就无法归因。
         self._usage: dict[str, dict[str, Any]] = {}
+        # None = 还没试过；False = 网关不认 stream_options.include_usage，别再试
+        self._stream_usage_ok: bool | None = None
 
     # ---------- 能力探测 ----------
     async def probe(self) -> dict:
@@ -284,25 +286,36 @@ class LLMClient:
         model: str | None = None,
         thinking: bool | None = None,
         include_reasoning: bool = True,
+        usage_tag: str | None = None,
     ) -> AsyncIterator[tuple[str, str]]:
         """流式增量的**完整**视图：yield `(kind, text)`，kind 为 reasoning / content。
 
         单独留这个接口而不是给 `stream()` 加返回值，是因为两者语义不同：
         抽取、摘要这类调用方只关心正文，多出来的思考通道反而要它们自己过滤；
         问答则要拿思考过程去做"首字前的空窗期"提示。
+
+        `usage_tag` 非空时会要求上游在流末尾回 `usage`（OpenAI 的
+        `stream_options.include_usage`）。不要求的话，流式请求**根本拿不到**
+        用量——问答侧此前就是这样，token 一条都没记上。
         """
         body = self._thinking_body(thinking)
         async with self._sem:
-            stream = await self.client.chat.completions.create(
-                model=model or self.model,
-                messages=messages,
+            stream = await self._open_stream(
+                messages,
                 temperature=temperature,
                 max_tokens=max_tokens,
-                stream=True,
-                extra_body=body or None,
+                model=model,
+                extra_body=body,
+                want_usage=bool(usage_tag),
             )
+            # 用量帧可能**重复出现多次**（实测 360 网关一个短回答推了 3 帧，
+            # 每帧都是累计值）。只留最后一帧、循环结束记一次，否则 prompt_tokens
+            # 会被算成 3 倍——这种"看起来翻了几倍"的错账比记 0 更难发现。
+            pending = None
             try:
                 async for chunk in stream:
+                    if usage_tag and getattr(chunk, "usage", None) is not None:
+                        pending = chunk
                     if not chunk.choices:
                         continue
                     delta = chunk.choices[0].delta
@@ -315,8 +328,56 @@ class LLMClient:
                     if delta.content:
                         yield "content", delta.content
             finally:
+                if usage_tag and pending is not None:
+                    self._record_usage(usage_tag, pending, model or self.model)
                 # 客户端断开时必须关掉上游连接，否则继续计费
                 await stream.close()
+
+    async def _open_stream(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float,
+        max_tokens: int,
+        model: str | None,
+        extra_body: dict | None,
+        want_usage: bool,
+    ):
+        """建立流式连接；网关不认 `stream_options` 时退化成不带用量重连一次。
+
+        退化结果记在 `_stream_usage_ok`：只试一次，之后不再为每个请求多付一次失败调用。
+        """
+        kwargs: dict[str, Any] = {}
+        if want_usage and self._stream_usage_ok is not False:
+            kwargs["stream_options"] = {"include_usage": True}
+        try:
+            stream = await self.client.chat.completions.create(
+                model=model or self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+                extra_body=extra_body or None,
+                **kwargs,
+            )
+            if kwargs:
+                self._stream_usage_ok = True
+            return stream
+        except Exception as exc:  # noqa: BLE001
+            if not kwargs:
+                raise
+            self._stream_usage_ok = False
+            logger.warning(
+                "网关不支持 stream_options.include_usage，后续不再请求流式用量：%s", exc
+            )
+            return await self.client.chat.completions.create(
+                model=model or self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                stream=True,
+                extra_body=extra_body or None,
+            )
 
     async def stream(
         self,

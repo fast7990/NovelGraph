@@ -199,6 +199,13 @@ body {
   font-size: 11px; color: var(--semi-color-text-3);
   font-variant-numeric: tabular-nums;
 }
+/* "摘要"徽标：表示这个会话的早期回合已折叠成摘要，侧栏里一眼能看出来 */
+.sess-sum {
+  padding: 0 4px; border-radius: 3px;
+  background: var(--semi-color-primary-light-default);
+  color: var(--semi-color-primary);
+  cursor: help;
+}
 
 /* 上下文承接提示条：告诉用户这一轮用到了上文的哪些实体 */
 .mem-bar {
@@ -218,7 +225,7 @@ body {
 .mem-note { color: var(--semi-color-text-3); }
 
 .chat-main {
-  flex: 1 0 auto; min-width: 0; display: flex;
+  flex: 1 1 auto; min-width: 0; display: flex;
   background: var(--semi-color-bg-0);
   border: 1px solid var(--semi-color-border);
   border-radius: var(--semi-border-radius-large);

@@ -85,6 +85,14 @@ class Settings(BaseSettings):
     # 问答正文的 max_tokens。推理模型的思考与正文共用这份预算（实测一次回答思考
     # 就吃掉 800-2000 token），4096 在长回答上会不够，给到 6144。
     chat_max_tokens: int = 6144
+    # 长对话的滚动摘要。带进 prompt 的只有最近 6 轮，更早的必须压成摘要，
+    # 否则第 7 轮起前面的内容就凭空消失（"聊了半天它突然不记得开头"）。
+    # 未覆盖的回合数超过 trigger 才触发；压缩时保留最近 keep 轮原文不进摘要。
+    chat_summary_enabled: bool = True
+    chat_summary_trigger_turns: int = 8
+    chat_summary_keep_turns: int = 3
+    # 摘要用快模型：这是压缩任务，不需要推理，glm-5 会把预算烧在思考上
+    chat_summary_model: str = "deepseek-chat-v3"
 
     # ---- 混合检索（P1-M6）----
     # 词法通道：SQLite FTS5 + 自建 bigram（中文两字词是 trigram 的死角，见 lexical.py）

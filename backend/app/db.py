@@ -102,6 +102,12 @@ _COLUMN_PATCHES = (
     # 会话记忆：会话按最近活跃排序、消息按会话内轮次排序
     "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
     "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS seq INTEGER NOT NULL DEFAULT 0",
+    # 长对话的滚动摘要 + 问答 token 台账
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT ''",
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary_seq INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS prompt_tokens BIGINT NOT NULL DEFAULT 0",
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS completion_tokens BIGINT NOT NULL DEFAULT 0",
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS llm_calls INTEGER NOT NULL DEFAULT 0",
 )
 
 

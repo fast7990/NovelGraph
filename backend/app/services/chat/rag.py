@@ -137,6 +137,11 @@ async def prepare(
         novel_title = novel.title if novel else ""
 
     turns = await memory.load_turns(session_id) if session_id else []
+    # 已被摘要覆盖的回合不再重复塞进 prompt：摘要 + 这些原文同时出现，
+    # 模型会当成两段不同的历史，反而更容易把细节说岔。
+    summary, covered = await memory.load_summary(session_id) if session_id else ("", 0)
+    if covered:
+        turns = [t for t in turns if int(t.get("seq") or 0) > covered]
 
     # ---- 上下文实体 → 检索 query 增强 ----
     ctx_entities: list[str] = []
@@ -157,7 +162,7 @@ async def prepare(
         # 最多 20 条：再多会稀释资料、也压不住模型的"补充常识"倾向
         lines = "\n".join(f"- {f['text']}（第{f['chapter_no']}章）" for f in facts[:20])
         parts.append(f"【人物关系】（图谱抽取，仅辅助理清关系）\n{lines}")
-    memory_block = memory.build_memory_block(turns)
+    memory_block = memory.build_memory_block(turns, summary)
     if memory_block:
         parts.append(memory_block)
     parts.append(f"【问题】{question}")

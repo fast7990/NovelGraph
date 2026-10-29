@@ -1,6 +1,10 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+// 后端地址默认 8000；起第二个后端实例验证时用 VITE_API_TARGET 指过去，
+// 免得为了测新代码去动别人正在跑的那个进程。
+const apiTarget = process.env.VITE_API_TARGET || 'http://127.0.0.1:8000'
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -9,7 +13,7 @@ export default defineConfig({
     host: '127.0.0.1',
     port: 5173,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:8000', changeOrigin: true },
+      '/api': { target: apiTarget, changeOrigin: true },
     },
   },
 })

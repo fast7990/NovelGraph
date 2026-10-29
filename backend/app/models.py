@@ -22,7 +22,7 @@ import uuid
 from datetime import UTC, datetime
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -193,6 +193,11 @@ class ChatSession(Base):
     `updated_at` 单独存而不靠 `chat_messages.created_at` 反推：
     会话列表要按"最近活跃"排序，而消息是成对插入的（user/assistant），
     反推一次要多一次聚合查询，且删消息后时间会回退。
+
+    `summary` / `summary_seq` 是**滚动摘要**：长对话不可能把全部历史塞进
+    prompt（6 轮之后的开销和噪声都不可接受），所以把已被挤出去的回合压成
+    一段摘要，`summary_seq` 记住"压到第几条消息为止"。下一轮组装时
+    「摘要 + summary_seq 之后的新回合」拼起来，早期内容才不会凭空消失。
     """
 
     __tablename__ = "chat_sessions"
@@ -200,6 +205,13 @@ class ChatSession(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("cs"))
     novel_id: Mapped[str] = mapped_column(String(40), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    summary_seq: Mapped[int] = mapped_column(Integer, default=0)
+    # 问答的 token 消耗（按会话累计）。图谱构建把用量记在 job.stats 上，
+    # 问答没有 job 可挂，就落在会话行上——否则"问答花了多少钱"根本查不到。
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    completion_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    llm_calls: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = _TZ.col(default=_now)
     updated_at: Mapped[datetime] = _TZ.col(default=_now, onupdate=_now)
 

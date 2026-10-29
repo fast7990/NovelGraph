@@ -19,8 +19,9 @@ from __future__ import annotations
 import logging
 import re
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 
+from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatMessage, ChatSession
 
@@ -264,10 +265,203 @@ async def save_turn(
     await save_answer(session_id, seq, answer, citations)
 
 
+async def add_usage(session_id: str, prompt: int, completion: int, calls: int) -> None:
+    """把一轮（或多次）LLM 调用的 token 累加进会话。
+
+    用 SQL 的 `SET x = x + n` 而不是"读出来加完再写回"：
+    问答回复和后台摘要可能同时结束，读-改-写会丢掉其中一边。
+    """
+    if not session_id or (not prompt and not completion and not calls):
+        return
+    async with SessionLocal() as db:
+        await db.execute(
+            update(ChatSession)
+            .where(ChatSession.id == session_id)
+            .values(
+                prompt_tokens=ChatSession.prompt_tokens + int(prompt or 0),
+                completion_tokens=ChatSession.completion_tokens + int(completion or 0),
+                llm_calls=ChatSession.llm_calls + int(calls or 0),
+            )
+        )
+        await db.commit()
+
+
 def _now_utc():
     from datetime import UTC, datetime
 
     return datetime.now(UTC)
+
+
+async def load_summary(session_id: str) -> tuple[str, int]:
+    """取会话的滚动摘要，以及它已经覆盖到哪条消息（seq）。"""
+    if not session_id:
+        return "", 0
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            return "", 0
+        return (sess.summary or ""), int(sess.summary_seq or 0)
+
+
+SUMMARY_SYSTEM = """你在压缩一段多轮对话，供后续提问继续使用。
+
+要求：
+1. 只保留后续可能用到的信息：用户问过什么、结论是什么、涉及的人物/章节等专有名词。
+2. 保留用户的原话意图（他用什么词问的），但不要逐字复述整段问答。
+3. 已经确认"资料未提及"的事项要明确写出来，避免后面重复检索、重复否定。
+4. 400 字以内，要点式中文。不要编造原文没有的内容，不要写"用户很满意"这类废话。
+"""
+
+
+async def _summarize(prev: str, turns: list[dict], usage_tag: str | None = None) -> str:
+    from app.services.llm.client import get_llm
+
+    lines: list[str] = []
+    for t in turns:
+        if t["role"] == "user":
+            lines.append(f"用户：{t['question']}")
+        else:
+            content = re.sub(r"\[资料\d+\]", "", t["content"])
+            if len(content) > 500:
+                content = content[:500] + "…"
+            lines.append(f"助手：{content}")
+    messages = [
+        {"role": "system", "content": SUMMARY_SYSTEM},
+        {
+            "role": "user",
+            "content": f"【已有摘要】\n{prev or '（无）'}\n\n【需要并进摘要的对话】\n"
+            + "\n".join(lines),
+        },
+    ]
+    text = await get_llm().complete(
+        messages,
+        temperature=0.1,
+        max_tokens=800,
+        model=settings.chat_summary_model,
+        usage_tag=usage_tag,  # 摘要也是这个会话的开销，一并记账
+    )
+    return text.strip()
+
+
+async def flush_usage(session_id: str) -> None:
+    """把 `LLMClient` 里属于这个会话的用量落到会话行上，并清空累计器。
+
+    问答正文和后台摘要都会调这里：谁先跑完谁取走，`add_usage` 用的是
+    `SET x = x + n`，所以先取后取都不丢。清空是必须的 —— 否则长跑进程里
+    这个字典会按会话无限增长。
+    """
+    from app.services.llm.client import get_llm
+
+    usage = get_llm().pop_usage(session_id)
+    if not usage:
+        return
+    await add_usage(
+        session_id,
+        int(usage.get("prompt_tokens") or 0),
+        int(usage.get("completion_tokens") or 0),
+        int(usage.get("calls") or 0),
+    )
+
+
+async def maybe_summarize(session_id: str) -> bool:
+    """把挤出 prompt 窗口的早期回合压成摘要。返回是否真的压了。
+
+    触发条件看的是**未被摘要覆盖的回合数**，不是总回合数：
+    压过一次之后 `summary_seq` 前进，剩下的新回合重新计数，
+    否则每轮都会触发一次摘要（又慢又费钱）。
+    """
+    if not session_id or not settings.chat_summary_enabled:
+        return False
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            return False
+        prev = sess.summary or ""
+        covered = int(sess.summary_seq or 0)
+        rows = (
+            await db.execute(
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id, ChatMessage.seq > covered)
+                .order_by(ChatMessage.seq)
+            )
+        ).scalars().all()
+
+    turns = _pair_turns(list(rows))
+    # turns 是**消息**列表（一问一答各一条），阈值是回合数，必须 ×2。
+    # 这里若按 len(turns) 比，trigger=8 实际只等到 4 个回合就压缩，
+    # 而且 turns[:-keep] 也只砍掉 keep 条消息而不是 keep 个回合。
+    if len(turns) <= settings.chat_summary_trigger_turns * 2:
+        return False
+
+    keep = max(0, settings.chat_summary_keep_turns)
+    batch = turns[: -keep * 2] if keep else turns
+    if not batch:
+        return False
+
+    try:
+        new_summary = await _summarize(prev, batch, usage_tag=session_id)
+    except Exception:  # noqa: BLE001
+        # 摘要失败不影响问答主链路：下一轮还会再试
+        logger.warning("会话摘要失败 session=%s", session_id, exc_info=True)
+        return False
+    finally:
+        await flush_usage(session_id)
+    if not new_summary:
+        return False
+
+    upto = int(batch[-1].get("seq") or 0)
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            return False
+        sess.summary = new_summary
+        sess.summary_seq = upto
+        await db.commit()
+    logger.info(
+        "会话摘要已更新 session=%s 覆盖到 seq=%s 压缩回合=%d 字数=%d",
+        session_id,
+        upto,
+        len(batch) // 2,
+        len(new_summary),
+    )
+    return True
+
+
+def _pair_turns(rows: list) -> list[dict]:
+    """把消息序列配成完整回合（user + assistant），丢弃半截回合。
+
+    半截（只有 user 没 assistant）说明那轮被中断了 —— 塞进历史或摘要里
+    会让模型以为"上一轮问过但没回答"，进而跑去重答一遍。
+    """
+    out: list[dict] = []
+    i = 0
+    while i < len(rows) - 1:
+        cur, nxt = rows[i], rows[i + 1]
+        if cur.role == "user" and nxt.role == "assistant":
+            out.append(
+                {
+                    "role": "user",
+                    "content": cur.content,
+                    "question": cur.content,
+                    "citations": [],
+                    "status": "ok",
+                    "seq": int(cur.seq or 0),
+                }
+            )
+            out.append(
+                {
+                    "role": "assistant",
+                    "content": nxt.content,
+                    "question": "",
+                    "citations": nxt.citations or [],
+                    "status": "ok",
+                    "seq": int(nxt.seq or 0),
+                }
+            )
+            i += 2
+        else:
+            i += 1
+    return out
 
 
 async def load_turns(session_id: str, limit: int = HISTORY_TURNS) -> list[dict]:
@@ -318,6 +512,7 @@ async def load_turns(session_id: str, limit: int = HISTORY_TURNS) -> list[dict]:
                 "question": user.content,
                 "citations": [],
                 "status": "ok",
+                "seq": int(user.seq or 0),
             },
         )
         turns.insert(
@@ -328,6 +523,7 @@ async def load_turns(session_id: str, limit: int = HISTORY_TURNS) -> list[dict]:
                 "question": "",
                 "citations": m.citations or [],
                 "status": "ok",
+                "seq": int(m.seq or 0),
             },
         )
         i = j - 1
@@ -364,17 +560,22 @@ async def context_entities(
     return verified[:limit]
 
 
-def build_memory_block(turns: list[dict]) -> str:
+def build_memory_block(turns: list[dict], summary: str = "") -> str:
     """把历史回合渲染成 prompt 里的一段文本。
 
     刻意不用 OpenAI 的多轮 messages 格式，而是压成一段"对话摘要"：
     多轮格式下每轮都是独立的 role/content，模型容易把历史里的
     "【资料】"当成当前轮的证据；压成一段并明确标注是历史，
     能显著降低"用旧资料的编号回答新问题"的概率。
+
+    `summary` 是被挤出窗口的更早回合压成的摘要，放在最前面并标明
+    "更早"，让模型知道那部分信息不完整、但确实发生过。
     """
-    if not turns:
+    if not turns and not summary:
         return ""
     lines = ["【历史对话】"]
+    if summary:
+        lines.append(f"（更早的对话摘要，非原文）\n{summary}")
     for t in turns:
         if t["role"] == "user":
             lines.append(f"用户：{t['question']}")

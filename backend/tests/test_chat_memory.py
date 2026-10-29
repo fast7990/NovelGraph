@@ -156,3 +156,181 @@ class TestTurnCounting:
         assert out[-1]["content"] == "答9"
 
 
+
+
+class _FakeSession:
+    """ChatSession 的最小替身：只带摘要相关字段。"""
+
+    def __init__(self, summary: str = "", summary_seq: int = 0):
+        self.id = "cs_fake"
+        self.summary = summary
+        self.summary_seq = summary_seq
+
+
+class _FakeDB:
+    """够用的假会话上下文：get() 返回同一个 session，execute() 返回给定消息。"""
+
+    def __init__(self, sess, rows):
+        self.sess = sess
+        self.rows = rows
+        self.committed = 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def get(self, _model, _pk):
+        return self.sess
+
+    async def execute(self, *_a, **_k):
+        rows = self.rows
+
+        class _R:
+            def scalars(self_inner):
+                return self_inner
+
+            def all(self_inner):
+                return rows
+
+        return _R()
+
+    async def commit(self):
+        self.committed += 1
+
+
+def _turns_rows(n: int, start_seq: int = 1):
+    rows = []
+    seq = start_seq
+    for i in range(n):
+        rows.append(_Msg(seq=seq, role="user", content=f"问{i}"))
+        seq += 1
+        rows.append(_Msg(seq=seq, role="assistant", content=f"答{i}"))
+        seq += 1
+    return rows
+
+
+class TestPairTurns:
+    def test_drops_dangling_turn(self):
+        """半截回合（只有用户提问、没有回答）不能进历史/摘要。"""
+        rows = [
+            _Msg(seq=1, role="user", content="问一"),
+            _Msg(seq=2, role="assistant", content="答一"),
+            _Msg(seq=3, role="user", content="问二被中断"),
+        ]
+        turns = memory._pair_turns(rows)
+        assert len(turns) == 2
+        assert turns[0]["question"] == "问一"
+
+    def test_carries_seq(self):
+        turns = memory._pair_turns(_turns_rows(1))
+        assert [t["seq"] for t in turns] == [1, 2]
+
+
+class TestRollingSummary:
+    """长对话不能只截 6 轮 —— 被挤出去的早期回合要压成摘要，否则凭空消失。"""
+
+    def test_skips_below_trigger(self, monkeypatch):
+        sess = _FakeSession()
+        db = _FakeDB(sess, _turns_rows(4))  # 4 回合 < 触发阈值 8
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        import asyncio
+
+        assert asyncio.run(memory.maybe_summarize("cs_fake")) is False
+        assert sess.summary == ""
+        assert db.committed == 0
+
+    def test_summarizes_old_turns_and_advances_seq(self, monkeypatch):
+        sess = _FakeSession()
+        rows = _turns_rows(12)  # 12 回合 = 24 条消息，seq 1..24
+        db = _FakeDB(sess, rows)
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        captured = {}
+
+        async def fake_summarize(prev, turns, usage_tag=None):
+            captured["prev"] = prev
+            captured["turns"] = turns
+            return "摘要是这样"
+
+        monkeypatch.setattr(memory, "_summarize", fake_summarize)
+        import asyncio
+
+        assert asyncio.run(memory.maybe_summarize("cs_fake")) is True
+        assert sess.summary == "摘要是这样"
+        # 保留最近 keep=3 回合原文，其余 9 回合进摘要 → 覆盖到第 18 条消息
+        assert sess.summary_seq == 18
+        assert len(captured["turns"]) == 18
+
+    def test_keeps_recent_turns_out_of_summary(self, monkeypatch):
+        sess = _FakeSession()
+        db = _FakeDB(sess, _turns_rows(12))
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        captured = {}
+
+        async def fake_summarize(prev, turns, usage_tag=None):
+            captured["turns"] = turns
+            return "x"
+
+        monkeypatch.setattr(memory, "_summarize", fake_summarize)
+        import asyncio
+
+        asyncio.run(memory.maybe_summarize("cs_fake"))
+        questions = [t["question"] for t in captured["turns"] if t["role"] == "user"]
+        # 最近 3 轮（问9/问10/问11）必须留在窗口里，不能被压掉
+        assert "问11" not in questions
+        assert "问10" not in questions
+        assert "问9" not in questions
+        assert "问0" in questions
+
+    def test_feeds_previous_summary_back(self, monkeypatch):
+        """二次压缩要把旧摘要带上，否则早前的内容会被覆盖掉。"""
+        sess = _FakeSession(summary="旧摘要", summary_seq=4)
+        db = _FakeDB(sess, _turns_rows(10, start_seq=5))
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+        captured = {}
+
+        async def fake_summarize(prev, turns, usage_tag=None):
+            captured["prev"] = prev
+            return "新摘要"
+
+        monkeypatch.setattr(memory, "_summarize", fake_summarize)
+        import asyncio
+
+        asyncio.run(memory.maybe_summarize("cs_fake"))
+        assert captured["prev"] == "旧摘要"
+
+    def test_summary_failure_keeps_session_untouched(self, monkeypatch):
+        sess = _FakeSession()
+        db = _FakeDB(sess, _turns_rows(12))
+        monkeypatch.setattr(memory, "SessionLocal", lambda: db)
+
+        async def boom(prev, turns, usage_tag=None):
+            raise RuntimeError("上游炸了")
+
+        monkeypatch.setattr(memory, "_summarize", boom)
+        # flush_usage 会碰真数据库，这里一并替换掉
+        async def noop_flush(_sid):
+            return None
+
+        monkeypatch.setattr(memory, "flush_usage", noop_flush)
+        import asyncio
+
+        assert asyncio.run(memory.maybe_summarize("cs_fake")) is False
+        assert sess.summary == ""
+        assert db.committed == 0
+
+
+class TestMemoryBlockWithSummary:
+    def test_includes_summary_before_turns(self):
+        block = memory.build_memory_block(
+            [{"role": "user", "content": "问", "question": "问", "citations": []}],
+            summary="早先聊过华佗的结局",
+        )
+        assert "更早的对话摘要" in block
+        assert "早先聊过华佗的结局" in block
+
+    def test_summary_only_still_renders(self):
+        """窗口里一条原文回合都没有时，摘要本身仍要有输出。"""
+        block = memory.build_memory_block([], summary="只有摘要")
+        assert "只有摘要" in block

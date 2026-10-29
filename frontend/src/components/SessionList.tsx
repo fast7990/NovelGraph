@@ -130,6 +130,19 @@ export default function SessionList({
                   </div>
                   <div className="sess-meta">
                     <span>{s.message_count} 条</span>
+                    {(s.prompt_tokens || s.completion_tokens) ? (
+                      <span title="本会话问答消耗的 token（含后台摘要）">
+                        {fmtTok((s.prompt_tokens || 0) + (s.completion_tokens || 0))} tok
+                      </span>
+                    ) : null}
+                    {s.summary_chars ? (
+                      <span
+                        className="sess-sum"
+                        title={`早期 ${Math.floor((s.summary_seq || 0) / 2)} 轮已压缩成摘要，最近几轮保留原文`}
+                      >
+                        摘要
+                      </span>
+                    ) : null}
                     {s.last_message_at && <span>{fmtWhen(s.last_message_at)}</span>}
                   </div>
                 </>
@@ -155,4 +168,11 @@ function fmtWhen(iso: string) {
   if (d <= 7) return `${d} 天前`
   const dt = new Date(t)
   return `${dt.getMonth() + 1}-${dt.getDate()}`
+}
+
+/** token 数量：上万就折成 k，否则侧栏那点宽度放不下。 */
+function fmtTok(n: number) {
+  if (n >= 10000) return `${(n / 1000).toFixed(0)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
 }
