@@ -186,7 +186,20 @@ export const api = {
   chatSessionCreate: (novelId: string) =>
     fetch(`${BASE}/chat/sessions?novel_id=${novelId}`, { method: 'POST' }).then((r) => j<ChatSession>(r)),
   chatSessionMessages: (sessionId: string) =>
-    fetch(`${BASE}/chat/sessions/${sessionId}/messages`).then((r) => j<{ items: ChatHistoryMessage[] }>(r)),
+    fetch(`${BASE}/chat/sessions/${sessionId}/messages`).then((r) =>
+      j<{
+        items: ChatHistoryMessage[]
+        /** 会话累计用量：重新打开旧对话时气泡里也要能回显总消耗 */
+        usage?: {
+          prompt_tokens?: number
+          completion_tokens?: number
+          total_tokens?: number
+          calls?: number
+          summary_seq?: number
+          summary_chars?: number
+        }
+      }>(r),
+    ),
   chatSessionRename: (sessionId: string, title: string) =>
     fetch(`${BASE}/chat/sessions/${sessionId}`, {
       method: 'PATCH',

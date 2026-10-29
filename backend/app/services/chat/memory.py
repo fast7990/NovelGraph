@@ -292,6 +292,42 @@ def _now_utc():
     return datetime.now(UTC)
 
 
+async def session_usage(session_id: str) -> dict:
+    """读会话的累计用量与摘要状态（一次查询，给前端回显）。
+
+    单独抽出来是因为 `done` 事件要同时带"本轮"和"累计"两个数：
+    本轮来自 `flush_usage()`，累计必须从库上读（`add_usage` 是 SQL 侧自增，
+    Python 里没有新的累计值）。
+    """
+    if not session_id:
+        return {}
+    async with SessionLocal() as db:
+        row = (
+            await db.execute(
+                select(
+                    ChatSession.prompt_tokens,
+                    ChatSession.completion_tokens,
+                    ChatSession.llm_calls,
+                    ChatSession.summary_seq,
+                    func.coalesce(func.length(ChatSession.summary), 0),
+                ).where(ChatSession.id == session_id)
+            )
+        ).first()
+    if row is None:
+        return {}
+    prompt, completion, calls, summary_seq, summary_chars = row
+    prompt = int(prompt or 0)
+    completion = int(completion or 0)
+    return {
+        "prompt_tokens": prompt,
+        "completion_tokens": completion,
+        "total_tokens": prompt + completion,
+        "calls": int(calls or 0),
+        "summary_seq": int(summary_seq or 0),
+        "summary_chars": int(summary_chars or 0),
+    }
+
+
 async def load_summary(session_id: str) -> tuple[str, int]:
     """取会话的滚动摘要，以及它已经覆盖到哪条消息（seq）。"""
     if not session_id:
@@ -343,24 +379,34 @@ async def _summarize(prev: str, turns: list[dict], usage_tag: str | None = None)
     return text.strip()
 
 
-async def flush_usage(session_id: str) -> None:
+async def flush_usage(session_id: str) -> dict:
     """把 `LLMClient` 里属于这个会话的用量落到会话行上，并清空累计器。
 
     问答正文和后台摘要都会调这里：谁先跑完谁取走，`add_usage` 用的是
     `SET x = x + n`，所以先取后取都不丢。清空是必须的 —— 否则长跑进程里
     这个字典会按会话无限增长。
+
+    返回**本次**取走并落账的用量（空 dict = 这一轮没有新消耗）。
+    返回值是给 `done` 事件用的：前端要在这轮答完的那一刻就显示消耗，
+    不能靠它再查一次会话列表（落账与刷新之间有时序差，而且多一次请求）。
     """
     from app.services.llm.client import get_llm
 
     usage = get_llm().pop_usage(session_id)
     if not usage:
-        return
+        return {}
     await add_usage(
         session_id,
         int(usage.get("prompt_tokens") or 0),
         int(usage.get("completion_tokens") or 0),
         int(usage.get("calls") or 0),
     )
+    return {
+        "prompt_tokens": int(usage.get("prompt_tokens") or 0),
+        "completion_tokens": int(usage.get("completion_tokens") or 0),
+        "total_tokens": int(usage.get("total_tokens") or 0),
+        "calls": int(usage.get("calls") or 0),
+    }
 
 
 async def maybe_summarize(session_id: str) -> bool:

@@ -29,24 +29,34 @@ def _sse(event: str, data: dict) -> str:
 
 async def _persist_and_housekeep(
     session_id: str, qseq: int, answer: str, cites: list[dict]
-) -> None:
+) -> dict:
     """存回答 → 结掉这一轮的 token 账 → 视情况压缩早期回合。
 
     三件事绑在一起，是因为它们都以"这一轮已落库"为前提：摘要要能看到最新消息，
     用量要包含这一轮的请求。任一步失败都不该连累另外两步，所以各自兜住。
+
+    返回 `{"round": 本轮用量, "total": 会话累计}`，供 `done` 事件回传前端
+    —— 前端要在这轮答完的瞬间就能显示消耗，不该再发一次列表请求去等落账。
     """
+    round_usage: dict = {}
     try:
         await memory.save_answer(session_id, qseq, answer, cites)
     except Exception:  # noqa: BLE001
         logger.exception("落库失败 会话=%s", session_id)
     try:
-        await memory.flush_usage(session_id)
+        round_usage = await memory.flush_usage(session_id)
     except Exception:  # noqa: BLE001
         logger.warning("用量落账失败 会话=%s", session_id, exc_info=True)
     try:
         await memory.maybe_summarize(session_id)
     except Exception:  # noqa: BLE001
         logger.warning("会话摘要调度失败 会话=%s", session_id, exc_info=True)
+    try:
+        total = await memory.session_usage(session_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("读累计用量失败 会话=%s", session_id, exc_info=True)
+        total = {}
+    return {"round": round_usage, "total": total}
 
 
 @router.post("/chat")
@@ -174,14 +184,20 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 persist("".join(buffer) or "（本轮生成被中断）", citations)
 
         answer = "".join(buffer)
+        usage_info: dict = {}
         if answer.strip():
-            await _persist_and_housekeep(session_id, qseq, answer, citations)
+            usage_info = await _persist_and_housekeep(session_id, qseq, answer, citations)
             saved = True
         else:
             # 空回答也要把用量与摘要推进掉，否则这一轮的 token 和压缩机会都白丢
             await memory.flush_usage(session_id)
+            usage_info = {"round": {}, "total": await memory.session_usage(session_id)}
         logger.info(
-            "chat 落库 会话=%s 回答长度=%d 引用=%d", session_id, len(answer), len(citations)
+            "chat 落库 会话=%s 回答长度=%d 引用=%d token=%s",
+            session_id,
+            len(answer),
+            len(citations),
+            usage_info.get("round") or "-",
         )
         yield _sse(
             "done",
@@ -192,6 +208,9 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 "reasoning_ms": reasoning_ms,
                 "ttft_ms": ttft_ms,
                 "elapsed_ms": elapsed(),
+                # 本轮的 token 消耗与会话累计：前端在答案下方直接显示，
+                # 用户不用去侧栏找、也不用等列表刷新
+                "usage": usage_info,
             },
         )
 
@@ -254,6 +273,10 @@ async def session_messages(session_id: str) -> dict:
     按 `seq` 排序：同一回合的 user/assistant 可能落在同一微秒
     （同一事务两次 insert），只按 created_at 排会偶发把 assistant 排到前面，
     回放出来的对话是倒的。
+
+    顺带返回会话的累计用量：重新打开一个旧对话时，气泡里的"本轮消耗"是历史
+    数据、按消息没存，但"这个会话一共花了多少"是有的。不带的话用户刷新一次
+    就以为台账没了。
     """
     async with SessionLocal() as db:
         rows = (
@@ -274,7 +297,8 @@ async def session_messages(session_id: str) -> dict:
                 "created_at": r.created_at,
             }
             for r in rows
-        ]
+        ],
+        "usage": await memory.session_usage(session_id),
     }
 
 

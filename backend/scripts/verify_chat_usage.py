@@ -40,6 +40,11 @@ async def main() -> None:
                         print("meta memory=", d.get("memory"))
                     elif ev == "done":
                         print("done chars=", d.get("chars"))
+                        # done 里必须直接带用量：前端靠它在这一轮答完的瞬间显示消耗，
+                        # 不带的话就得再查一次列表，落账与刷新之间的时序差会让用户以为没记上
+                        u = d.get("usage") or {}
+                        print("done usage.round=", u.get("round"))
+                        print("done usage.total=", u.get("total"))
         # 等落账
         await asyncio.sleep(3)
         lst = (await c.get(f"{BASE}/chat/sessions?novel_id={NID}")).json()["items"]

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Input, Popconfirm, Spin, Typography } from '@douyinfe/semi-ui'
 import { IconEdit, IconPlus, IconDelete } from '@douyinfe/semi-icons'
 import { api, ChatSession } from '../api/client'
+import { fmtTok } from '../utils/tok'
 
 /**
  * 会话侧栏。
@@ -168,11 +169,4 @@ function fmtWhen(iso: string) {
   if (d <= 7) return `${d} 天前`
   const dt = new Date(t)
   return `${dt.getMonth() + 1}-${dt.getDate()}`
-}
-
-/** token 数量：上万就折成 k，否则侧栏那点宽度放不下。 */
-function fmtTok(n: number) {
-  if (n >= 10000) return `${(n / 1000).toFixed(0)}k`
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
-  return String(n)
 }

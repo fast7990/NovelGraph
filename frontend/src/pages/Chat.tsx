@@ -6,6 +6,20 @@ import ReasoningPanel from '../components/ReasoningPanel'
 import type { RetSummary, ThinkPhase } from '../components/ReasoningPanel'
 import SessionList from '../components/SessionList'
 import { api, ChatSession, Citation, Novel, RetrievalMode, streamSSE } from '../api/client'
+import { fmtTok } from '../utils/tok'
+
+/** 一轮问答的 token 消耗。round = 本轮，total = 这个会话到现在为止。 */
+type RoundUsage = {
+  round?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; calls?: number }
+  total?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    calls?: number
+    summary_seq?: number
+    summary_chars?: number
+  }
+}
 
 // 检索模式徽标：让"这次是两路融合还是单路降级"一眼可见，排查时不用翻日志
 const MODE_TAG: Record<RetrievalMode, { text: string; color: 'green' | 'amber' | 'blue' | 'red' }> = {
@@ -60,6 +74,9 @@ export default function ChatPage({
   const [retMap, setRetMap] = useState<Record<string, RetSummary>>({})
   // 本轮用到的上下文实体（后端从历史里继承出来用于消歧）
   const [memMap, setMemMap] = useState<Record<string, { turns: number; entities: string[] }>>({})
+  // 每轮问答的 token 消耗，按消息 id 存。来源是 done 事件而不是会话列表接口：
+  // 落账与列表刷新之间有时序差，等列表回来再显示会让用户觉得"没记上"。
+  const [usageMap, setUsageMap] = useState<Record<string, RoundUsage>>({})
   const [activeId, setActiveId] = useState('') // 右侧面板当前展示的引用所属消息
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sessionId, setSessionId] = useState('')
@@ -118,6 +135,7 @@ export default function ChatPage({
     setCiteMap({})
     setThinkMap({})
     setRetMap({})
+    setUsageMap({})
     setActiveId('')
     try {
       const r = await api.chatSessionMessages(sid)
@@ -139,6 +157,13 @@ export default function ChatPage({
       }
       setChats(msgs)
       setCiteMap(cites)
+      // 历史回放没有"本轮"的账（按消息存 token 没意义、也没存），但"这个会话
+      // 一共花了多少"是有的。挂到最后一条答案上，刷新或重开对话时不会以为什么都没记。
+      const lastAns = [...msgs].reverse().find((m) => m.role === 'assistant' && m.id)
+      const lastAnsId = String(lastAns?.id || '')
+      if (lastAnsId && r.usage && (r.usage.total_tokens || 0) > 0) {
+        setUsageMap({ [lastAnsId]: { total: r.usage } })
+      }
       // 打开会话就展示最后一条答案的出处：否则右侧面板永远是"提问后这里显示…"，
       // 用户得先点进消息才知道当初引了哪些原文。activeIdx 回到 -1（不预选某一条）
       if (lastWithCites) {
@@ -161,6 +186,7 @@ export default function ChatPage({
     setThinkMap({})
     setRetMap({})
     setMemMap({})
+    setUsageMap({})
     setActiveId('')
     sessionRef.current = ''
     setSessionId('')
@@ -217,6 +243,7 @@ export default function ChatPage({
         setThinkMap({})
         setRetMap({})
         setMemMap({})
+        setUsageMap({})
         setActiveId('')
       }
       await loadSessions(novelId)
@@ -315,6 +342,11 @@ export default function ChatPage({
           } else if (event === 'done') {
             think.phase = 'done'
             think.ms = data.reasoning_ms ?? think.ms
+            // 消耗在 done 里就拿到了，不用等下面的列表刷新：
+            // 列表刷新只更新侧栏的累计数，气泡里显示的是这一轮自己的账
+            if (data.usage) {
+              setUsageMap((prev) => ({ ...prev, [aid]: data.usage as RoundUsage }))
+            }
           } else if (event === 'error') {
             think.phase = 'done'
             stopFlush()
@@ -427,6 +459,7 @@ export default function ChatPage({
                 setThinkMap({})
                 setRetMap({})
                 setMemMap({})
+                setUsageMap({})
                 setChats([])
               }}
               chatBoxRenderConfig={{
@@ -443,8 +476,13 @@ export default function ChatPage({
                   ) : null
                   const cs = mid ? citeMap[mid] : undefined
                   const mem = mid ? memMap[mid] : undefined
+                  const us = mid ? usageMap[mid] : undefined
                   if (message?.role !== 'assistant') return defaultContent
-                  if (!panel && !cs?.length) return defaultContent
+                  // 有思考面板 / 引用 / 用量三者之一才走自定义渲染
+                  const hasRound = (us?.round?.total_tokens || 0) > 0
+                  const hasUsage =
+                    !!us && (hasRound || (us.total?.total_tokens || 0) > 0)
+                  if (!panel && !cs?.length && !hasUsage) return defaultContent
                   return (
                     <div className="msg-body">
                       {panel}
@@ -462,6 +500,45 @@ export default function ChatPage({
                         </div>
                       )}
                       {defaultContent}
+                      {hasUsage && us && (
+                        <div
+                          className="tok-bar"
+                          title={
+                            (hasRound
+                              ? `本轮输入 ${us.round?.prompt_tokens || 0} tok` +
+                                `，输出 ${us.round?.completion_tokens || 0} tok` +
+                                `（${us.round?.calls || 0} 次模型调用）\n`
+                              : '') +
+                            `本会话累计输入 ${us.total?.prompt_tokens || 0} tok` +
+                            `，输出 ${us.total?.completion_tokens || 0} tok` +
+                            `，共 ${us.total?.calls || 0} 次调用（含后台压缩摘要）`
+                          }
+                        >
+                          {hasRound ? (
+                            <>
+                              <span className="tok-main">
+                                本轮 {fmtTok(us.round?.total_tokens || 0)} tok
+                              </span>
+                              <span className="tok-sub">
+                                入 {fmtTok(us.round?.prompt_tokens || 0)} · 出{' '}
+                                {fmtTok(us.round?.completion_tokens || 0)}
+                              </span>
+                              <span className="tok-sep">|</span>
+                            </>
+                          ) : null}
+                          <span className={hasRound ? 'tok-sub' : 'tok-main'}>
+                            会话累计 {fmtTok(us.total?.total_tokens || 0)} tok
+                          </span>
+                          {us.total?.summary_chars ? (
+                            <span
+                              className="sess-sum"
+                              title="早期回合已压缩成摘要，之后的提问按摘要 + 最近几轮原文理解"
+                            >
+                              摘要
+                            </span>
+                          ) : null}
+                        </div>
+                      )}
                       {cs && cs.length > 0 && (
                         <div className="cite-chips">
                           {cs.map((c, i) => (
