@@ -14,6 +14,13 @@
 - 轮询必须带条件（有活任务才轮）、可见性门控、单飞守卫
 - 构建用 `./node_modules/.bin/vite build`（`npx pnpm build` 在本机坏了）
 - vite 固定 `host: '127.0.0.1'`（默认只听 ::1）
+- **`<Card title="字符串">` 禁用**：Semi 对字符串标题硬编码 `Typography.Title ellipsis`，内部 `ReactResizeObserver` 走 `findDOMNode`，StrictMode 下刷弃用告警。统一用 `src/components/CardTitle.tsx`
+- `Popconfirm`/`Tooltip` 的子元素必须是原生 DOM（`<span>`），放 `<Button>` 会触发同样的 findDOMNode 告警
+- 控制台必须保持 0 告警；8 个页面全扫一遍再提交
+
+## 排查环境
+- 本机设了 `http_proxy=127.0.0.1:52313`，`curl` 测本地服务必须加 `--noproxy '*'`，否则返回假的 502
+- httpx 同理，脚本里用 `trust_env=False`
 
 ## 工作习惯
 - 性能问题先用日志量化 QPS、按客户端端口归因，再改代码；不猜

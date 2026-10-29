@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Banner, Card, Col, Empty, Row, Select, Table, Tag, Typography } from '@douyinfe/semi-ui'
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
+import CardTitle from '../components/CardTitle'
 import PageHead from '../components/PageHead'
 import { api, fmtNum, Novel } from '../api/client'
 
@@ -126,7 +127,7 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
         </Col>
       </Row>
 
-      <Card title="按章节分布（样本）" style={{ marginTop: 16 }}>
+      <Card title={<CardTitle text="按章节分布（样本）" />} style={{ marginTop: 16 }}>
         <div className="hist" style={{ height: 150 }}>
           {byChapter.length === 0 && (
             <Typography.Text type="tertiary">暂无数据</Typography.Text>
@@ -141,7 +142,7 @@ export default function VectorView({ novelId, onPick }: { novelId: string; onPic
         </div>
       </Card>
 
-      <Card title="向量记录样本" style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }}>
+      <Card title={<CardTitle text="向量记录样本" />} style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }}>
         <Table
           columns={columns}
           dataSource={(data?.items || []).slice(0, 30)}

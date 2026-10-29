@@ -120,7 +120,9 @@ async function waitTextStable(page, stableMs = 8000, timeoutMs = 240000) {
   }
   await page.screenshot({ path: `${OUT}/session-turn2-context.png` })
 
-  // ---- 4. 刷新页面 → 验证对话是否还在 ----
+  // ---- 4. 刷新页面 → 验证对话自动恢复（URL 带 session，不该依赖手动点） ----
+  const deepLink = await page.evaluate(() => window.location.search)
+  console.log('刷新前 URL:', deepLink)
   await page.reload({ waitUntil: 'domcontentloaded' })
   await box.waitFor({ timeout: 60000 })
   // 会话列表是异步加载的，等它稳定（数量不再变化）再统计
@@ -132,9 +134,10 @@ async function waitTextStable(page, stableMs = 8000, timeoutMs = 240000) {
     },
     { timeout: 30000 },
   ).catch(() => {})
-  await sleep(1500)
+  await sleep(2500)
   const afterReload = await page.locator('.sess-item').count()
-  console.log('刷新后侧栏会话数:', afterReload)
+  const autoRestored = await page.locator('.semi-chat-chatBox').count()
+  console.log('刷新后侧栏会话数:', afterReload, '| 自动恢复的消息块数:', autoRestored)
   await page.screenshot({ path: `${OUT}/session-after-reload.png` })
 
   // 点第一条会话，验证历史恢复
@@ -149,6 +152,20 @@ async function waitTextStable(page, stableMs = 8000, timeoutMs = 240000) {
     const msgCount = await page.locator('.semi-chat-chatBox').count()
     console.log('刷新后点开会话的消息块数:', msgCount)
     await page.screenshot({ path: `${OUT}/session-restored.png` })
+  }
+
+  // ---- 5. 深链接：新开一个页面直接用 ?session= 打开 ----
+  if (deepLink.includes('session=')) {
+    await page.goto(`http://127.0.0.1:5173/${deepLink}#chat`, { waitUntil: 'domcontentloaded' })
+    await page.waitForFunction(
+      () => document.querySelectorAll('.semi-chat-chatBox').length > 0,
+      { timeout: 30000 },
+    ).catch(() => {})
+    await sleep(1200)
+    const msgs = await page.locator('.semi-chat-chatBox').count()
+    const cites = await page.locator('.cite-item').count()
+    console.log('深链接打开消息块数:', msgs, '| 打开即显示的引用条数:', cites)
+    await page.screenshot({ path: `${OUT}/session-deeplink.png` })
   }
 
   console.log('页面错误:', errors.length ? errors : '无')

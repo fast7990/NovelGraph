@@ -82,38 +82,38 @@ export default function ChatPage({
   }, [])
 
   // ---- 会话列表：按书加载 ----
-  const loadSessions = useCallback(async (nid: string) => {
+  const loadSessions = useCallback(async (nid: string): Promise<ChatSession[]> => {
     if (!nid) {
       setSessions([])
-      return
+      return []
     }
     setSessLoading(true)
     try {
       const r = await api.chatSessions(nid)
       setSessions(r.items || [])
+      return r.items || []
     } catch {
       setSessions([])
+      return []
     } finally {
       setSessLoading(false)
     }
   }, [])
 
-  useEffect(() => {
-    setChats([])
-    setCiteMap({})
-    setThinkMap({})
-    setRetMap({})
-    setMemMap({})
-    setActiveId('')
-    sessionRef.current = ''
-    setSessionId('')
-    void loadSessions(novelId)
-  }, [novelId, loadSessions])
+  // 当前会话写进 URL：刷新、分享链接、浏览器前进后退都能回到原对话。
+  // 用 replaceState 而不是 pushState —— 切会话不该把历史栈塞满。
+  const syncUrl = useCallback((sid: string) => {
+    const u = new URL(window.location.href)
+    if (sid) u.searchParams.set('session', sid)
+    else u.searchParams.delete('session')
+    window.history.replaceState(null, '', u.toString())
+  }, [])
 
   // 切会话 → 拉历史消息回填聊天区
   const openSession = useCallback(async (sid: string) => {
     sessionRef.current = sid
     setSessionId(sid)
+    syncUrl(sid)
     setChats([])
     setCiteMap({})
     setThinkMap({})
@@ -123,6 +123,7 @@ export default function ChatPage({
       const r = await api.chatSessionMessages(sid)
       const msgs: Message[] = []
       const cites: Record<string, Citation[]> = {}
+      let lastWithCites = ''
       for (const m of r.items || []) {
         msgs.push({
           id: m.id,
@@ -133,15 +134,48 @@ export default function ChatPage({
         } as Message)
         if (m.role === 'assistant' && m.citations?.length) {
           cites[m.id] = m.citations
+          lastWithCites = m.id
         }
       }
       setChats(msgs)
       setCiteMap(cites)
+      // 打开会话就展示最后一条答案的出处：否则右侧面板永远是"提问后这里显示…"，
+      // 用户得先点进消息才知道当初引了哪些原文。activeIdx 回到 -1（不预选某一条）
+      if (lastWithCites) {
+        setActiveId(lastWithCites)
+        setActiveIdx(-1)
+      }
     } catch {
-      // 会话已被删或网络异常：保持空界面，不要把错误抛给用户
+      // 会话已被删或网络异常：保持空界面，不要把错误抛给用户；
+      // 同时把 URL 里的失效 session 去掉，否则每次刷新都会再试一次
       setChats([])
+      syncUrl('')
     }
-  }, [])
+  }, [syncUrl])
+
+  // 首屏 / 切书：清空界面 → 拉会话列表 → 若 URL 带了 session 且确实属于这本书，恢复它。
+  // 声明在 openSession 之后：effect 的依赖数组在 render 期求值，提前引用会撞 TDZ。
+  useEffect(() => {
+    setChats([])
+    setCiteMap({})
+    setThinkMap({})
+    setRetMap({})
+    setMemMap({})
+    setActiveId('')
+    sessionRef.current = ''
+    setSessionId('')
+    void (async () => {
+      const list = await loadSessions(novelId)
+      const want = new URLSearchParams(window.location.search).get('session')
+      if (!novelId || !want) return
+      if (!list.some((s) => s.id === want)) {
+        // 会话已删、或 URL 里带的是别的书的会话：清掉参数，别每次刷新都试
+        syncUrl('')
+        return
+      }
+      await openSession(want)
+    })()
+  }, [novelId, loadSessions, openSession, syncUrl])
 
   const createSession = useCallback(async () => {
     if (!novelId) return
@@ -177,6 +211,7 @@ export default function ChatPage({
         // 删掉当前会话 → 回到空界面
         sessionRef.current = ''
         setSessionId('')
+        syncUrl('')
         setChats([])
         setCiteMap({})
         setThinkMap({})
@@ -186,7 +221,7 @@ export default function ChatPage({
       }
       await loadSessions(novelId)
     },
-    [novelId, loadSessions],
+    [novelId, loadSessions, syncUrl],
   )
 
   const send = async (text: string) => {
@@ -387,6 +422,7 @@ export default function ChatPage({
                 // 删数据要走侧栏的删除按钮
                 sessionRef.current = ''
                 setSessionId('')
+                syncUrl('')
                 setCiteMap({})
                 setThinkMap({})
                 setRetMap({})

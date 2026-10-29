@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Banner, Button, Card, Col, Progress, Row, Tag, Typography } from '@douyinfe/semi-ui'
 import { IconArrowRight } from '@douyinfe/semi-icons'
+import CardTitle from '../components/CardTitle'
 import PageHead from '../components/PageHead'
 import { usePoll } from '../hooks/usePoll'
 import { api, fmtNum } from '../api/client'
@@ -103,7 +104,7 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
       <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
         <Col xs={24} xl={14}>
           <Card
-            title="依赖健康"
+            title={<CardTitle text="依赖健康" />}
             headerExtraContent={
               <Typography.Text type="tertiary" size="small">
                 每 5 秒刷新
@@ -119,7 +120,17 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
                 <span>{d.name}</span>
                 <span className="row" style={{ justifyContent: 'flex-end' }}>
                   {[d.server_version, d.model, d.detail].filter(Boolean).length > 0 && (
-                    <Typography.Text type="tertiary" size="small" ellipsis={{ showTooltip: true }}>
+                    <Typography.Text
+                      type="tertiary"
+                      size="small"
+                      title={[d.server_version, d.model, d.detail].filter(Boolean).join(' · ')}
+                      style={{
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap',
+                        maxWidth: 260,
+                      }}
+                    >
                       {[d.server_version, d.model, d.detail].filter(Boolean).join(' · ')}
                     </Typography.Text>
                   )}
@@ -149,7 +160,7 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
         </Col>
 
         <Col xs={24} xl={10}>
-          <Card title="运行配置" style={{ height: '100%' }}>
+          <Card title={<CardTitle text="运行配置" />} style={{ height: '100%' }}>
             <div className="kv">
               <span>向量后端</span>
               <span>{cfg.vector_backend || '-'}</span>
@@ -185,7 +196,7 @@ export default function Overview({ onGo }: { onGo: (t: any, id?: string) => void
       </Row>
 
       <Card
-        title="下一步"
+        title={<CardTitle text="下一步" />}
         style={{ marginTop: 16 }}
         headerExtraContent={
           <Button

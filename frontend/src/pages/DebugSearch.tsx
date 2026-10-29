@@ -12,6 +12,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui'
 import { IconSearch } from '@douyinfe/semi-icons'
+import CardTitle from '../components/CardTitle'
 import PageHead from '../components/PageHead'
 import { api, Novel } from '../api/client'
 
@@ -173,7 +174,7 @@ export default function DebugSearch({ novelId, onPick }: { novelId: string; onPi
           </Row>
 
           <Card
-            title={`结果 ${items.length} 条`}
+            title={<CardTitle text={`结果 ${items.length} 条`} />}
             style={{ marginTop: 16 }}
             headerExtraContent={
               <Tag color={d.reranked ? 'green' : 'amber'} type="light" size="small">
@@ -201,7 +202,19 @@ export default function DebugSearch({ novelId, onPick }: { novelId: string; onPi
                   >
                     {i + 1}
                   </span>
-                  <Typography.Text strong ellipsis={{ showTooltip: true }} style={{ flex: 1 }}>
+                  {/* 不用 ellipsis={{showTooltip}}：Semi 内部 ResizeObserver 会 findDOMNode，
+                      React 18 StrictMode 下每次挂载都刷弃用告警。CSS 省略 + 原生 title 等价 */}
+                  <Typography.Text
+                    strong
+                    title={it.title || `第 ${it.chapter_no} 章`}
+                    style={{
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
                     {it.title || `第 ${it.chapter_no} 章`}
                   </Typography.Text>
                   <span className="mono" style={{ color: 'var(--semi-color-text-2)' }}>

@@ -13,6 +13,7 @@ import {
   Typography,
 } from '@douyinfe/semi-ui'
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
+import CardTitle from '../components/CardTitle'
 import PageHead from '../components/PageHead'
 import { usePoll } from '../hooks/usePoll'
 import { api, Chunk, ChunkReport, fmtNum, Novel } from '../api/client'
@@ -269,7 +270,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
           <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
             <Col xs={24} xl={12}>
               <Card
-                title="阶段进度"
+                title={<CardTitle text="阶段进度" />}
                 headerExtraContent={
                   <Button size="small" onClick={async () => { await api.rebuild(novelId); loadReport() }}>
                     重跑全流程
@@ -298,7 +299,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
             </Col>
 
             <Col xs={24} xl={12}>
-              <Card title="子块长度分布（token 估算）" style={{ height: '100%' }}>
+              <Card title={<CardTitle text="子块长度分布（token 估算）" />} style={{ height: '100%' }}>
                 {report.chunk_count === 0 ? (
                   <Empty title="还没有切片" description="切块完成后这里会显示长度分布" style={{ padding: '24px 0' }} />
                 ) : (
@@ -321,7 +322,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
 
           {report.issues.length > 0 && (
             <Card
-              title={`质量告警（${report.issues.length}）`}
+              title={<CardTitle text={`质量告警（${report.issues.length}）`} />}
               headerExtraContent={
                 <Typography.Text type="tertiary" size="small">
                   按章节 / 类型排序，前 200 条
@@ -341,7 +342,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
           )}
 
           {report.sample_chunks.length > 0 && (
-            <Card title="人工抽检（每 20 章抽 1 块）" style={{ marginTop: 16 }}>
+            <Card title={<CardTitle text="人工抽检（每 20 章抽 1 块）" />} style={{ marginTop: 16 }}>
               <Row gutter={[16, 16]}>
                 {report.sample_chunks.map((c) => (
                   <Col xs={24} xl={12} key={c.id}>
@@ -361,7 +362,7 @@ export default function ChunkReview({ novelId, onPick }: { novelId: string; onPi
           )}
 
           <Card
-            title={`切片浏览（${total}）`}
+            title={<CardTitle text={`切片浏览（${total}）`} />}
             headerExtraContent={
               <div className="row">
                 <Select

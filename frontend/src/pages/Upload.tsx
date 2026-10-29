@@ -15,6 +15,7 @@ import {
 } from '@douyinfe/semi-ui'
 import { IconUpload } from '@douyinfe/semi-icons'
 import type { ColumnProps } from '@douyinfe/semi-ui/lib/es/table/interface'
+import CardTitle from '../components/CardTitle'
 import PageHead from '../components/PageHead'
 import { usePoll } from '../hooks/usePoll'
 import { api, fmtBytes, fmtNum, Job, Novel, STAGE_LABEL } from '../api/client'
@@ -223,9 +224,13 @@ export default function Upload({ onGo }: { onGo: (t: any, id?: string) => void }
             okText="删除"
             onConfirm={() => remove(n)}
           >
-            <Button size="small" theme="borderless" type="danger">
-              删除
-            </Button>
+            {/* 触发元素必须是原生 DOM：直接放 <Button> 时 Semi 拿到的是组件实例，
+                只能退回 findDOMNode 定位，React 18 StrictMode 下每次挂载刷 3 条弃用告警 */}
+            <span className="popconfirm-anchor">
+              <Button size="small" theme="borderless" type="danger">
+                删除
+              </Button>
+            </span>
           </Popconfirm>
         </div>
       ),
@@ -289,7 +294,7 @@ export default function Upload({ onGo }: { onGo: (t: any, id?: string) => void }
         </Col>
 
         <Col xs={24} xl={9}>
-          <Card title="入库参数" style={{ height: '100%' }}>
+          <Card title={<CardTitle text="入库参数" />} style={{ height: '100%' }}>
             <div style={{ marginBottom: 12 }}>
               <Typography.Text type="tertiary" size="small">
                 书名（可选，默认取文件名）
@@ -332,7 +337,7 @@ export default function Upload({ onGo }: { onGo: (t: any, id?: string) => void }
         </Col>
       </Row>
 
-      <Card style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }} title="入库记录">
+      <Card style={{ marginTop: 16 }} bodyStyle={{ padding: 0 }} title={<CardTitle text="入库记录" />}>
         <Table
           columns={columns}
           dataSource={novels}

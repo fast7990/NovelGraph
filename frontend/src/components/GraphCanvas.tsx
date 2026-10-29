@@ -176,7 +176,9 @@ export default function GraphCanvas({
       elements: [],
       minZoom: 0.15,
       maxZoom: 4,
-      wheelSensitivity: 0.25,
+      // 不设 wheelSensitivity：非默认值会让 cytoscape 每次初始化都打印
+      // "You have set a custom wheel sensitivity…" 告警，且官方明确说这会
+      // 让滚轮缩放手感与主流鼠标不一致。保持默认，靠 min/maxZoom 兜住范围。
       boxSelectionEnabled: false,
       style: [
         {
