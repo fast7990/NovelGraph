@@ -188,15 +188,31 @@ class ChunkReport(Base):
 
 
 class ChatSession(Base):
+    """一次连续对话。
+
+    `updated_at` 单独存而不靠 `chat_messages.created_at` 反推：
+    会话列表要按"最近活跃"排序，而消息是成对插入的（user/assistant），
+    反推一次要多一次聚合查询，且删消息后时间会回退。
+    """
+
     __tablename__ = "chat_sessions"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("cs"))
     novel_id: Mapped[str] = mapped_column(String(40), index=True)
     title: Mapped[str] = mapped_column(String(200), default="新对话")
     created_at: Mapped[datetime] = _TZ.col(default=_now)
+    updated_at: Mapped[datetime] = _TZ.col(default=_now, onupdate=_now)
 
 
 class ChatMessage(Base):
+    """一条对话消息。
+
+    `seq` 是**会话内的轮次序号**：同一回合的 user/assistant 靠它排序。
+    不能只靠 `created_at` —— 实测有 2 组 user/assistant 落到了同一微秒
+    （同一事务里两次 insert），`ORDER BY created_at` 在同值下顺序不确定，
+    会把 assistant 排到 user 前面，历史回放出来的对话就是倒的。
+    """
+
     __tablename__ = "chat_messages"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("cm"))
@@ -204,6 +220,7 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(20), default="user")
     content: Mapped[str] = mapped_column(Text, default="")
     citations: Mapped[list] = mapped_column(JSONB, default=list)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = _TZ.col(default=_now)
 
 

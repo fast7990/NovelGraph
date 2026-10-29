@@ -217,7 +217,7 @@
 <div class="wrap">
 
 <header>
-  <div class="eyebrow">Technical Architecture · v1.12</div>
+  <div class="eyebrow">Technical Architecture · v1.13</div>
   <h1>长篇小说 <span>RAG 检索</span> + <span>知识图谱</span> 双引擎</h1>
   <p class="sub">
     原始文本 → 向量与倒排 + 知识图谱 <b>全部装在同一个 PostgreSQL</b> → 可视化中台 + 大模型增强问答。
@@ -248,6 +248,10 @@
   <div class="note">
     <h3>④ 切片过程必须看得见</h3>
     <p>按字符数算真实进度，附 token 分布、8 类异常检测、抽样预览。每条告警可跳转原文核查——切片是最容易错、也最难核实的一步。</p>
+  </div>
+  <div class="note ok">
+    <h3>⑤ 记忆要进 prompt，更要进检索</h3>
+    <p>多轮对话只把历史塞进 prompt 是不够的：追问「他后来怎么样了」里没有任何可检索实体，词法通道直接空，向量只能靠「后来/怎么样」硬凑——实测召回第 79 回（0.31 分），正确答案在第 78 回。所以历史里提取实体后要<b>再走一路召回</b>，与原问句 RRF 平权融合：词法召回 13→50，top1 命中正确章节。实体候选必须过<span class="k">实体表校验</span>，否则正则毛刺会污染 query。</p>
   </div>
 </div>
 
@@ -755,7 +759,7 @@
 </section>
 
 <footer>
-  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.12</span>
+  <span>长篇小说 RAG + 知识图谱 双引擎 · 技术架构设计 v1.13</span>
   <span>完整规格见 docs/架构设计说明书.md · 接口定义见 docs/openapi.yaml</span>
 </footer>
 

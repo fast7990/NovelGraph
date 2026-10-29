@@ -101,6 +101,17 @@ async def delete_novel(novel_id: str, db: AsyncSession = Depends(get_session)) -
     await db.execute(delete(ChunkReport).where(ChunkReport.novel_id == novel_id))
     await db.execute(delete(Chapter).where(Chapter.novel_id == novel_id))
     await db.execute(delete(Job).where(Job.novel_id == novel_id))
+    # 会话也要一起删：`chat_sessions` / `chat_messages` 没有外键指向 novels，
+    # 不显式清就会留下孤儿会话 —— 前端列会话时它们还在，
+    # 点进去会看到一个"书已经没了"的空对话。
+    from app.models import ChatMessage, ChatSession
+
+    sess_ids = (
+        await db.execute(select(ChatSession.id).where(ChatSession.novel_id == novel_id))
+    ).scalars().all()
+    if sess_ids:
+        await db.execute(delete(ChatMessage).where(ChatMessage.session_id.in_(sess_ids)))
+    await db.execute(delete(ChatSession).where(ChatSession.novel_id == novel_id))
     await db.delete(novel)
     await db.commit()
 

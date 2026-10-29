@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Avatar, Card, Chat, Empty, Resizable, Select, Tag, Typography } from '@douyinfe/semi-ui'
 import type { Message } from '@douyinfe/semi-ui/lib/es/chat/interface'
 import PageHead from '../components/PageHead'
 import ReasoningPanel from '../components/ReasoningPanel'
 import type { RetSummary, ThinkPhase } from '../components/ReasoningPanel'
-import { api, Citation, Novel, RetrievalMode, streamSSE } from '../api/client'
+import SessionList from '../components/SessionList'
+import { api, ChatSession, Citation, Novel, RetrievalMode, streamSSE } from '../api/client'
 
 // 检索模式徽标：让"这次是两路融合还是单路降级"一眼可见，排查时不用翻日志
 const MODE_TAG: Record<RetrievalMode, { text: string; color: 'green' | 'amber' | 'blue' | 'red' }> = {
@@ -57,11 +58,19 @@ export default function ChatPage({
   // 流式增量先攒在闭包里每 90ms 刷一次，避免一个字一次 setState 把整棵树重绘。
   const [thinkMap, setThinkMap] = useState<Record<string, { text: string; phase: ThinkPhase; ms?: number }>>({})
   const [retMap, setRetMap] = useState<Record<string, RetSummary>>({})
+  // 本轮用到的上下文实体（后端从历史里继承出来用于消歧）
+  const [memMap, setMemMap] = useState<Record<string, { turns: number; entities: string[] }>>({})
   const [activeId, setActiveId] = useState('') // 右侧面板当前展示的引用所属消息
   const [activeIdx, setActiveIdx] = useState(-1)
   const [sessionId, setSessionId] = useState('')
+  const [sessions, setSessions] = useState<ChatSession[]>([])
+  const [sessLoading, setSessLoading] = useState(false)
   const [loading, setLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  // 当前会话 id 用 ref 同步一份：state 更新是异步的，
+  // "新建会话后立刻提问"这种时序下 state 还没落地，发出去的就是空 session_id，
+  // 后端会另建一个会话，上下文当场断掉。ref 是同步的，能避免这个竞态。
+  const sessionRef = useRef('')
 
   useEffect(() => {
     api.novels().then((r) => {
@@ -72,14 +81,113 @@ export default function ChatPage({
     })
   }, [])
 
+  // ---- 会话列表：按书加载 ----
+  const loadSessions = useCallback(async (nid: string) => {
+    if (!nid) {
+      setSessions([])
+      return
+    }
+    setSessLoading(true)
+    try {
+      const r = await api.chatSessions(nid)
+      setSessions(r.items || [])
+    } catch {
+      setSessions([])
+    } finally {
+      setSessLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
     setChats([])
     setCiteMap({})
     setThinkMap({})
     setRetMap({})
+    setMemMap({})
     setActiveId('')
+    sessionRef.current = ''
     setSessionId('')
-  }, [novelId])
+    void loadSessions(novelId)
+  }, [novelId, loadSessions])
+
+  // 切会话 → 拉历史消息回填聊天区
+  const openSession = useCallback(async (sid: string) => {
+    sessionRef.current = sid
+    setSessionId(sid)
+    setChats([])
+    setCiteMap({})
+    setThinkMap({})
+    setRetMap({})
+    setActiveId('')
+    try {
+      const r = await api.chatSessionMessages(sid)
+      const msgs: Message[] = []
+      const cites: Record<string, Citation[]> = {}
+      for (const m of r.items || []) {
+        msgs.push({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          createAt: new Date(m.created_at).getTime(),
+          status: 'complete',
+        } as Message)
+        if (m.role === 'assistant' && m.citations?.length) {
+          cites[m.id] = m.citations
+        }
+      }
+      setChats(msgs)
+      setCiteMap(cites)
+    } catch {
+      // 会话已被删或网络异常：保持空界面，不要把错误抛给用户
+      setChats([])
+    }
+  }, [])
+
+  const createSession = useCallback(async () => {
+    if (!novelId) return
+    try {
+      const s = await api.chatSessionCreate(novelId)
+      await loadSessions(novelId)
+      await openSession(s.id)
+    } catch {
+      // 忽略：下一条消息会隐式建会话
+    }
+  }, [novelId, loadSessions, openSession])
+
+  const renameSession = useCallback(
+    async (id: string, title: string) => {
+      try {
+        await api.chatSessionRename(id, title)
+        await loadSessions(novelId)
+      } catch {
+        // 忽略
+      }
+    },
+    [novelId, loadSessions],
+  )
+
+  const deleteSession = useCallback(
+    async (id: string) => {
+      try {
+        await api.chatSessionDelete(id)
+      } catch {
+        // 忽略
+      }
+      if (id === sessionRef.current) {
+        // 删掉当前会话 → 回到空界面
+        sessionRef.current = ''
+        setSessionId('')
+        setChats([])
+        setCiteMap({})
+        setThinkMap({})
+        setRetMap({})
+        setMemMap({})
+        setActiveId('')
+      }
+      await loadSessions(novelId)
+    },
+    [novelId, loadSessions],
+  )
 
   const send = async (text: string) => {
     const q = (text || '').trim()
@@ -121,7 +229,7 @@ export default function ChatPage({
     try {
       await streamSSE(
         '/api/v1/chat',
-        { novel_id: novelId, question: q, session_id: sessionId || null },
+        { novel_id: novelId, question: q, session_id: sessionRef.current || null },
         (event, data) => {
           if (event === 'meta') {
             setCiteMap((prev) => ({ ...prev, [aid]: data.citations || [] }))
@@ -138,7 +246,19 @@ export default function ChatPage({
                 degraded: data.degraded,
               },
             }))
-            setSessionId(data.session_id || '')
+            if (data.session_id) {
+              sessionRef.current = data.session_id
+              setSessionId(data.session_id)
+            }
+            // 上下文命中情况：显示"接住了上文"的实体，让用户能确认记忆生效
+            const mem = data.memory || {}
+            setMemMap((prev) => ({
+              ...prev,
+              [aid]: {
+                turns: Number(mem.turns || 0),
+                entities: Array.isArray(mem.entities) ? mem.entities : [],
+              },
+            }))
             think.phase = 'thinking'
             scheduleFlush()
           } else if (event === 'reasoning') {
@@ -180,6 +300,8 @@ export default function ChatPage({
           m.id === aid ? { ...m, status: (m.content ? 'complete' : 'error') as 'complete' | 'error' } : m,
         ),
       )
+      // 落库完成 → 刷新会话列表（标题/条数/时间都变了）
+      void loadSessions(novelId)
     } catch (e: any) {
       const aborted = e?.name === 'AbortError'
       setChats((prev) =>
@@ -235,6 +357,17 @@ export default function ChatPage({
 
       {novels.length > 0 && (
         <div className="chat-page">
+          <div className="chat-sess">
+            <SessionList
+              sessions={sessions}
+              activeId={sessionId}
+              loading={sessLoading}
+              onSelect={(id) => void openSession(id)}
+              onCreate={() => void createSession()}
+              onRename={(id, t) => void renameSession(id, t)}
+              onDelete={(id) => void deleteSession(id)}
+            />
+          </div>
           <div className="chat-main">
             <Chat
               style={{ height: '100%', width: '100%' }}
@@ -250,10 +383,14 @@ export default function ChatPage({
               onStopGenerator={() => abortRef.current?.abort()}
               showClearContext
               onClear={() => {
+                // 清空只清界面，不删后端记录 —— 用户可能只是想在当前会话里重新问，
+                // 删数据要走侧栏的删除按钮
+                sessionRef.current = ''
                 setSessionId('')
                 setCiteMap({})
                 setThinkMap({})
                 setRetMap({})
+                setMemMap({})
                 setChats([])
               }}
               chatBoxRenderConfig={{
@@ -269,11 +406,25 @@ export default function ChatPage({
                     />
                   ) : null
                   const cs = mid ? citeMap[mid] : undefined
+                  const mem = mid ? memMap[mid] : undefined
                   if (message?.role !== 'assistant') return defaultContent
                   if (!panel && !cs?.length) return defaultContent
                   return (
                     <div className="msg-body">
                       {panel}
+                      {mem && mem.entities.length > 0 && (
+                        <div className="mem-bar">
+                          <span className="mem-label">承接上文</span>
+                          {mem.entities.map((e) => (
+                            <span key={e} className="mem-entity">
+                              {e}
+                            </span>
+                          ))}
+                          <span className="mem-note">
+                            已用这些实体消歧检索（{mem.turns} 轮历史）
+                          </span>
+                        </div>
+                      )}
                       {defaultContent}
                       {cs && cs.length > 0 && (
                         <div className="cite-chips">
@@ -308,6 +459,8 @@ export default function ChatPage({
             enable={{ left: true, right: false, top: false, bottom: false }}
             style={{ height: '100%' }}
           >
+            {/* Resizable 只接受单个子元素，传数组会触发 React 的 children 类型警告 */}
+            <div className="cite-inner">
             <div className="cite-head">
               <span>引用资料</span>
               <span style={{ display: 'flex', gap: 6 }}>
@@ -369,6 +522,7 @@ export default function ChatPage({
                   </Typography.Text>
                 </div>
               ))}
+            </div>
             </div>
           </Resizable>
         </div>

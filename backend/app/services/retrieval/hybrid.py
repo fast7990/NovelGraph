@@ -132,17 +132,38 @@ async def _lexical_recall(novel_id: str, question: str) -> tuple[list[tuple[str,
         return [], f"lexical:{type(exc).__name__}"
 
 
-async def retrieve(novel_id: str, question: str, top_k: int | None = None) -> RetrievalResult:
+async def retrieve(
+    novel_id: str,
+    question: str,
+    top_k: int | None = None,
+    *,
+    extra_queries: list[str] | None = None,
+) -> RetrievalResult:
+    """多路召回。
+
+    `extra_queries` 是**上下文增强的 query**（多轮追问时，用历史实体补全后的问句）。
+    每路 query 各自跑稠密+词法，命名成 `dense@0` / `lexical@0` / `dense@1` …，
+    再统一 RRF 融合——这样"原问句"和"增强问句"是平权的，
+    增强问句召回错东西时不会把正确答案挤掉（它只多一路投票，不独占）。
+    """
     final_n = min(top_k or settings.context_parents, settings.context_parents)
 
-    dense, err_d = await _dense_recall(novel_id, question)
-    sparse, err_s = await _lexical_recall(novel_id, question)
+    queries = [question] + [q for q in (extra_queries or []) if q and q != question]
+    per_query: list[tuple[str, list, str | None, list, str | None]] = []
+    for q in queries:
+        dense, err_d = await _dense_recall(novel_id, q)
+        sparse, err_s = await _lexical_recall(novel_id, q)
+        per_query.append((q, dense, err_d, sparse, err_s))
 
     channels: dict[str, list[tuple[str, float]]] = {}
-    if dense:
-        channels["dense"] = dense
-    if sparse:
-        channels["lexical"] = sparse
+    for i, (_q, dense, _ed, sparse, _es) in enumerate(per_query):
+        if dense:
+            channels[f"dense@{i}"] = dense
+        if sparse:
+            channels[f"lexical@{i}"] = sparse
+
+    err_d = next((e for _q, _d, e, _s, _es in per_query if e), None)
+    err_s = next((e for _q, _d, _ed, _s, e in per_query if e), None)
 
     if not channels:
         mode = "empty"
@@ -156,9 +177,13 @@ async def retrieve(novel_id: str, question: str, top_k: int | None = None) -> Re
             detail={"dense": 0, "lexical": 0, "fused": 0, "errors": [e for e in (err_d, err_s) if e]},
         )
 
-    if dense and sparse:
+    # 模式判定用**第一路（原问句）**的召回情况，而不是最后一路。
+    # 多路循环里 dense/sparse 会被逐路覆盖，直接用它们会拿到
+    # "最后一路 query 命中了没有"，与本次问句无关。
+    _q0, dense0, _ed0, sparse0, _es0 = per_query[0]
+    if dense0 and sparse0:
         mode = "hybrid"
-    elif dense:
+    elif dense0:
         mode = "dense_only"
         logger.info("检索降级 dense_only novel=%s reason=%s", novel_id, err_s or "词法无命中")
     else:
@@ -255,14 +280,25 @@ async def retrieve(novel_id: str, question: str, top_k: int | None = None) -> Re
     ]
 
     detail = {
-        "dense": len(dense),
-        "lexical": len(sparse),
+        "dense": len(dense0),
+        "lexical": len(sparse0),
         "fused": len(fused),
         "candidates": len(cands),
         "parents": len(citations),
         "reranked": reranked,
         "rerank_model": settings.rerank_model if reranked else "",
     }
+    # 多路召回时把每一路单独记一笔：排查"追问召回了什么"时，
+    # 能分清是原问句召的、还是增强问句召的。
+    if len(queries) > 1:
+        detail["queries"] = [
+            {
+                "query": q,
+                "dense": len(d),
+                "lexical": len(s),
+            }
+            for q, d, _ed, s, _es in per_query
+        ]
     if rerank_error:
         detail["rerank_error"] = rerank_error
     if err_d or err_s:

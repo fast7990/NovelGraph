@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, func, select
 
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ChatMessage, ChatSession, Novel
 from app.schemas import ChatRequest
-from app.services.chat import rag
+from app.services.chat import memory, rag
 from app.services.llm.client import get_llm
 from app.services.retrieval.hybrid import retrieve
 
@@ -39,7 +40,13 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
         raise HTTPException(409, f"小说尚未完成入库（当前状态 {novel.status}），请等待切片与向量化完成")
 
     session_id = await rag.ensure_session(req.novel_id, req.session_id, req.question)
-    messages, result, _, graph_facts = await rag.prepare(
+    logger.info(
+        "chat 会话=%s 入参session=%s 问题=%r",
+        session_id,
+        req.session_id,
+        req.question[:30],
+    )
+    messages, result, _, graph_facts, ctx_entities, turns = await rag.prepare(
         req.novel_id, req.question, session_id, use_graph=req.use_graph
     )
     citations = [c.to_dict() for c in result.citations]
@@ -53,6 +60,10 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             """距本轮生成开始的毫秒数（不含检索：gen() 是在 prepare 之后才进的）。"""
             return int((time.perf_counter() - t0) * 1000)
 
+        # 先落提问：客户端可能在生成中途刷新/关页，那时服务端生成器会被取消，
+        # 走不到后面的落库代码。先存这一半，至少"问过什么"不会丢。
+        qseq = await memory.save_question(session_id, req.question)
+
         yield _sse(
             "meta",
             {
@@ -65,12 +76,44 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                 # 诊断用：关掉思考推送（LLM_SHOW_REASONING=false）时前端据此知道
                 # "不是模型没想，是没让你看"，排查时不用怀疑是链路丢了事件
                 "show_reasoning": show_reasoning,
+                # 本轮用到的历史上下文：前端在答案上方显示"基于上文 X"，
+                # 让用户能确认模型确实接住了上下文，而不是靠猜。
+                "memory": {
+                    "turns": turns,
+                    "entities": ctx_entities,
+                    "expanded_queries": result.detail.get("queries", [])[1:],
+                },
             },
         )
         buffer: list[str] = []
         reasoning_chars = 0
         ttft_ms: int | None = None
         reasoning_ms: int | None = None
+        saved = False
+
+        def persist(answer: str, cites: list[dict]) -> None:
+            """后台任务落库。
+
+            不能用 await：客户端断开时生成器要么收到 CancelledError、要么被
+            `aclose()` 关闭（GeneratorExit），这两种情况下在 finally 里 await
+            都会被立刻打断或直接抛 RuntimeError。用独立 task 让它跑完。
+            """
+            nonlocal saved
+            if saved or not answer.strip():
+                return
+            saved = True
+            task = asyncio.create_task(memory.save_answer(session_id, qseq, answer, cites))
+
+            def _done(t: asyncio.Task) -> None:
+                if t.cancelled():
+                    return
+                exc = t.exception()
+                if exc is not None:  # noqa: BLE001
+                    logger.error("落库失败 会话=%s: %s", session_id, exc)
+
+            task.add_done_callback(_done)
+
+        finished = False
         try:
             async for kind, text in llm.stream_events(
                 messages, temperature=0.6, max_tokens=settings.chat_max_tokens
@@ -90,14 +133,26 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
                         reasoning_ms = ttft_ms
                 buffer.append(text)
                 yield _sse("delta", {"text": text})
+            finished = True
         except Exception as exc:  # noqa: BLE001
             logger.exception("生成失败")
+            persist("".join(buffer) or f"（生成失败：{type(exc).__name__}）", citations)
             yield _sse("error", {"message": f"生成失败：{type(exc).__name__}: {exc}"})
             return
+        finally:
+            # 只有"没跑完"才走这里（CancelledError / GeneratorExit）：客户端刷新或
+            # 关页时生成器被取消，此时存下已生成的部分并标注中断，用户回来能看个半截，
+            # 而不是整轮凭空消失。
+            if not finished and not saved:
+                persist("".join(buffer) or "（本轮生成被中断）", citations)
 
         answer = "".join(buffer)
         if answer.strip():
-            await rag.save_turn(session_id, req.question, answer, citations)
+            await memory.save_answer(session_id, qseq, answer, citations)
+            saved = True
+        logger.info(
+            "chat 落库 会话=%s 回答长度=%d 引用=%d", session_id, len(answer), len(citations)
+        )
         yield _sse(
             "done",
             {
@@ -119,29 +174,122 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
 
 @router.get("/chat/sessions")
 async def list_sessions(novel_id: str) -> dict:
+    """列出某本书的会话，按最近活跃排序。
+
+    带上 `message_count` 与 `last_message_at`：前端要显示"这个会话有几句、
+    最后聊到什么时候"，否则一排会话标题长得都一样（都是首句截断），
+    用户分不清哪个是自己要回的那个。
+    """
     async with SessionLocal() as db:
         rows = (
             await db.execute(
-                select(ChatSession).where(ChatSession.novel_id == novel_id).order_by(desc(ChatSession.created_at)).limit(50)
+                select(
+                    ChatSession,
+                    func.count(ChatMessage.id).label("message_count"),
+                    func.max(ChatMessage.created_at).label("last_message_at"),
+                )
+                .outerjoin(ChatMessage, ChatMessage.session_id == ChatSession.id)
+                .where(ChatSession.novel_id == novel_id)
+                .group_by(ChatSession.id)
+                .order_by(desc(func.coalesce(func.max(ChatMessage.created_at), ChatSession.updated_at)))
+                .limit(100)
             )
-        ).scalars().all()
-    return {"items": [{"id": s.id, "title": s.title, "created_at": s.created_at} for s in rows]}
+        ).all()
+    return {
+        "items": [
+            {
+                "id": s.id,
+                "title": s.title,
+                "created_at": s.created_at,
+                "updated_at": s.updated_at,
+                "message_count": int(count or 0),
+                "last_message_at": last_at,
+            }
+            for s, count, last_at in rows
+        ]
+    }
 
 
 @router.get("/chat/sessions/{session_id}/messages")
 async def session_messages(session_id: str) -> dict:
+    """回放一个会话的完整消息。
+
+    按 `seq` 排序：同一回合的 user/assistant 可能落在同一微秒
+    （同一事务两次 insert），只按 created_at 排会偶发把 assistant 排到前面，
+    回放出来的对话是倒的。
+    """
     async with SessionLocal() as db:
         rows = (
             await db.execute(
-                select(ChatMessage).where(ChatMessage.session_id == session_id).order_by(ChatMessage.created_at)
+                select(ChatMessage)
+                .where(ChatMessage.session_id == session_id)
+                .order_by(ChatMessage.seq, ChatMessage.id)
             )
         ).scalars().all()
     return {
         "items": [
-            {"id": r.id, "role": r.role, "content": r.content, "citations": r.citations, "created_at": r.created_at}
+            {
+                "id": r.id,
+                "role": r.role,
+                "content": r.content,
+                "citations": r.citations,
+                "seq": r.seq,
+                "created_at": r.created_at,
+            }
             for r in rows
         ]
     }
+
+
+@router.patch("/chat/sessions/{session_id}")
+async def rename_session(session_id: str, payload: dict) -> dict:
+    """重命名会话。标题为空则回退到"新对话"。"""
+    title = str(payload.get("title", "")).strip()[:100]
+    if not title:
+        raise HTTPException(400, "标题不能为空")
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            raise HTTPException(404, "会话不存在")
+        sess.title = title
+        await db.commit()
+    return {"id": session_id, "title": title}
+
+
+@router.delete("/chat/sessions/{session_id}")
+async def delete_session(session_id: str) -> dict:
+    """删除会话及其消息。
+
+    消息必须一起删：`chat_messages` 没有外键指向 `chat_sessions`，
+    只删会话会留下孤儿消息，之后同一个 session_id 被复用时
+    会把旧消息一起拉出来。
+    """
+    async with SessionLocal() as db:
+        sess = await db.get(ChatSession, session_id)
+        if sess is None:
+            raise HTTPException(404, "会话不存在")
+        await db.execute(delete(ChatMessage).where(ChatMessage.session_id == session_id))
+        await db.delete(sess)
+        await db.commit()
+    return {"deleted": session_id}
+
+
+@router.post("/chat/sessions")
+async def create_session(novel_id: str) -> dict:
+    """显式新建一个空会话。
+
+    前端点"新对话"时立刻建一个，不等用户发第一条消息 ——
+    这样刷新页面能恢复到那个空会话，而不是静默开一个新的。
+    """
+    async with SessionLocal() as db:
+        novel = await db.get(Novel, novel_id)
+        if novel is None:
+            raise HTTPException(404, "小说不存在")
+        s = ChatSession(novel_id=novel_id, title="新对话")
+        db.add(s)
+        await db.commit()
+        await db.refresh(s)
+    return {"id": s.id, "title": s.title, "created_at": s.created_at, "updated_at": s.updated_at}
 
 
 @router.post("/search")

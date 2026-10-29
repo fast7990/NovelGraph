@@ -92,6 +92,24 @@ export type ChunkReport = {
   sample_chunks: Chunk[]
 }
 
+export type ChatSession = {
+  id: string
+  title: string
+  created_at: string
+  updated_at: string
+  message_count: number
+  last_message_at: string | null
+}
+
+export type ChatHistoryMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  content: string
+  citations: Citation[]
+  seq: number
+  created_at: string
+}
+
 async function j<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let detail = res.statusText
@@ -154,6 +172,22 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ novel_id: novelId, query, top_k: topK }),
     }).then((r) => j<any>(r)),
+
+  // ---- 会话（上下文记忆）----
+  chatSessions: (novelId: string) =>
+    fetch(`${BASE}/chat/sessions?novel_id=${novelId}`).then((r) => j<{ items: ChatSession[] }>(r)),
+  chatSessionCreate: (novelId: string) =>
+    fetch(`${BASE}/chat/sessions?novel_id=${novelId}`, { method: 'POST' }).then((r) => j<ChatSession>(r)),
+  chatSessionMessages: (sessionId: string) =>
+    fetch(`${BASE}/chat/sessions/${sessionId}/messages`).then((r) => j<{ items: ChatHistoryMessage[] }>(r)),
+  chatSessionRename: (sessionId: string, title: string) =>
+    fetch(`${BASE}/chat/sessions/${sessionId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    }).then((r) => j<{ id: string; title: string }>(r)),
+  chatSessionDelete: (sessionId: string) =>
+    fetch(`${BASE}/chat/sessions/${sessionId}`, { method: 'DELETE' }).then((r) => j<any>(r)),
 
   vectorSample: (novelId: string, limit = 400) =>
     fetch(`${BASE}/novels/${novelId}/vectors/sample?limit=${limit}`).then((r) => j<any>(r)),

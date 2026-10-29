@@ -99,6 +99,9 @@ async def init_db() -> None:
 _COLUMN_PATCHES = (
     # P1-M5：任务分种类，"图谱构建"和"入库"共用一个表但队列处理方式不同
     "ALTER TABLE jobs ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'ingest'",
+    # 会话记忆：会话按最近活跃排序、消息按会话内轮次排序
+    "ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now()",
+    "ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS seq INTEGER NOT NULL DEFAULT 0",
 )
 
 
