@@ -15,7 +15,9 @@ P0 只有稠密通道，问题很具体：
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -147,13 +149,19 @@ async def retrieve(
     增强问句召回错东西时不会把正确答案挤掉（它只多一路投票，不独占）。
     """
     final_n = min(top_k or settings.context_parents, settings.context_parents)
+    t0 = time.perf_counter()
 
     queries = [question] + [q for q in (extra_queries or []) if q and q != question]
     per_query: list[tuple[str, list, str | None, list, str | None]] = []
+    t_recall = time.perf_counter()
     for q in queries:
-        dense, err_d = await _dense_recall(novel_id, q)
-        sparse, err_s = await _lexical_recall(novel_id, q)
+        # 两路召回互相独立，并行跑省掉一路等待（多 query / 多轮追问时更明显）
+        (dense, err_d), (sparse, err_s) = await asyncio.gather(
+            _dense_recall(novel_id, q),
+            _lexical_recall(novel_id, q),
+        )
         per_query.append((q, dense, err_d, sparse, err_s))
+    ms_recall = (time.perf_counter() - t_recall) * 1000
 
     channels: dict[str, list[tuple[str, float]]] = {}
     for i, (_q, dense, _ed, sparse, _es) in enumerate(per_query):
@@ -168,7 +176,8 @@ async def retrieve(
     if not channels:
         mode = "empty"
         logger.warning(
-            "检索双通道均无结果 novel=%s q=%r errors=%s", novel_id, question[:30], [err_d, err_s]
+            "检索双通道均无结果 novel=%s q=%r errors=%s 耗时=%.1fms",
+            novel_id, question[:30], [err_d, err_s], (time.perf_counter() - t0) * 1000,
         )
         return RetrievalResult(
             query=question,
@@ -219,6 +228,10 @@ async def retrieve(
             )
         )
     if not cands:
+        logger.warning(
+            "检索召回为空（回表后无可用 chunk）novel=%s 耗时=%.1fms",
+            novel_id, (time.perf_counter() - t0) * 1000,
+        )
         return RetrievalResult(
             query=question,
             mode=mode,
@@ -227,6 +240,7 @@ async def retrieve(
         )
 
     # ---- 精排 ----
+    t_rerank = time.perf_counter()
     reranker = get_reranker()
     reranked = False
     rerank_error = ""
@@ -242,6 +256,7 @@ async def retrieve(
             logger.warning("精排失败，退回 RRF 排序: %s", rerank_error)
     elif settings.rerank_enabled and not reranker.ready:
         rerank_error = reranker.error or "模型未就绪"
+    ms_rerank = (time.perf_counter() - t_rerank) * 1000
 
     # ---- 父块去重：同一 parent 只留排最前的那块，避免重复引用同一段 ----
     seen: dict[str, _Cand] = {}
@@ -287,7 +302,18 @@ async def retrieve(
         "parents": len(citations),
         "reranked": reranked,
         "rerank_model": settings.rerank_model if reranked else "",
+        # 耗时埋点（毫秒）：recall = 两路召回，rerank = cross-encoder，total = 整个 retrieve
+        # 单 query 多轮追问时 recall 含所有 query 的两路并行耗时
+        "timing_ms": {
+            "recall": round(ms_recall, 1),
+            "rerank": round(ms_rerank, 1),
+            "total": round((time.perf_counter() - t0) * 1000, 1),
+        },
     }
+    logger.info(
+        "检索耗时 novel=%s mode=%s recall=%.1fms rerank=%.1fms total=%.1fms reranked=%s",
+        novel_id, mode, ms_recall, ms_rerank, (time.perf_counter() - t0) * 1000, reranked,
+    )
     # 多路召回时把每一路单独记一笔：排查"追问召回了什么"时，
     # 能分清是原问句召的、还是增强问句召的。
     if len(queries) > 1:

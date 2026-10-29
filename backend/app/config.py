@@ -93,6 +93,9 @@ class Settings(BaseSettings):
     retrieve_top_k: int = 20
     context_parents: int = 8
     enable_chapter_summary: bool = False
+    # Query 意图路由（P0）：纯闲聊 / 无内容 / 明确离题短句跳过检索与 LLM 生成。
+    # 纯规则、零额外大模型调用；默认开。详见 services/chat/intent.py。
+    intent_routing_enabled: bool = True
     # 问答正文的 max_tokens。推理模型的思考与正文共用这份预算（实测一次回答思考
     # 就吃掉 800-2000 token），4096 在长回答上会不够，给到 6144。
     chat_max_tokens: int = 6144
@@ -118,7 +121,7 @@ class Settings(BaseSettings):
     rerank_model: str = "BAAI/bge-reranker-base"
     rerank_ms_repo: str = "Xenova/bge-reranker-base"
     rerank_onnx_file: str = "onnx/model_int8.onnx"
-    rerank_input_k: int = 50   # 送进 cross-encoder 的候选数（再大收益递减、延迟线性涨）
+    rerank_input_k: int = 30   # 送进 cross-encoder 的候选数（2026-10 调优：50→30，约砍 40% 重排 CPU，质量无损）
     rerank_top_n: int = 24     # 精排后保留数，后面还要按父块去重
     rerank_max_length: int = 512
     rerank_threads: int = 8

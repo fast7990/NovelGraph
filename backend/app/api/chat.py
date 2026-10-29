@@ -103,6 +103,8 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
     messages, result, _, graph_facts, ctx_entities, turns = await rag.prepare(
         req.novel_id, req.question, session_id, use_graph=req.use_graph
     )
+    # 无关 query（问候 / 离题短句）：intent.py 已跳过检索与生成，这里直接取回话术
+    canned_reply = result.detail.get("reply") if result.mode == "irrelevant" else None
     citations = [c.to_dict() for c in result.citations]
     llm = get_llm()
     show_reasoning = settings.llm_show_reasoning
@@ -182,44 +184,52 @@ async def chat(req: ChatRequest, request: Request) -> StreamingResponse:
             task.add_done_callback(_done)
 
         finished = False
-        try:
-            async for kind, text in llm.stream_events(
-                messages,
-                temperature=0.6,
-                max_tokens=settings.chat_max_tokens,
-                # 用会话 id 做计量 tag：流式请求不主动要 usage 的话，网关不会回，
-                # 问答的 token 消耗就永远是 0
-                usage_tag=session_id,
-            ):
-                if await request.is_disconnected():
-                    logger.info("客户端断开，中止生成")
-                    break
-                if kind == "reasoning":
-                    reasoning_chars += len(text)
-                    if show_reasoning:
-                        # 事件里带 elapsed_ms：前端不用自己数秒，重连/慢网下也不会漂
-                        yield _sse("reasoning", {"text": text, "elapsed_ms": elapsed()})
-                    continue
-                if ttft_ms is None:
-                    ttft_ms = elapsed()
-                    if reasoning_chars:
-                        reasoning_ms = ttft_ms
-                buffer.append(text)
-                yield _sse("delta", {"text": text})
+        if canned_reply:
+            # 无关 query：跳过检索与 LLM 生成，直接回礼貌话术（省一次召回 + 一次大模型调用）
+            ttft_ms = elapsed()
+            buffer.append(canned_reply)
+            yield _sse("delta", {"text": canned_reply})
+            answer = canned_reply
             finished = True
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("生成失败")
-            persist("".join(buffer) or f"（生成失败：{type(exc).__name__}）", citations)
-            yield _sse("error", {"message": f"生成失败：{type(exc).__name__}: {exc}"})
-            return
-        finally:
-            # 只有"没跑完"才走这里（CancelledError / GeneratorExit）：客户端刷新或
-            # 关页时生成器被取消，此时存下已生成的部分并标注中断，用户回来能看个半截，
-            # 而不是整轮凭空消失。
-            if not finished and not saved:
-                persist("".join(buffer) or "（本轮生成被中断）", citations)
+        else:
+            try:
+                async for kind, text in llm.stream_events(
+                    messages,
+                    temperature=0.6,
+                    max_tokens=settings.chat_max_tokens,
+                    # 用会话 id 做计量 tag：流式请求不主动要 usage 的话，网关不会回，
+                    # 问答的 token 消耗就永远是 0
+                    usage_tag=session_id,
+                ):
+                    if await request.is_disconnected():
+                        logger.info("客户端断开，中止生成")
+                        break
+                    if kind == "reasoning":
+                        reasoning_chars += len(text)
+                        if show_reasoning:
+                            # 事件里带 elapsed_ms：前端不用自己数秒，重连/慢网下也不会漂
+                            yield _sse("reasoning", {"text": text, "elapsed_ms": elapsed()})
+                        continue
+                    if ttft_ms is None:
+                        ttft_ms = elapsed()
+                        if reasoning_chars:
+                            reasoning_ms = ttft_ms
+                    buffer.append(text)
+                    yield _sse("delta", {"text": text})
+                finished = True
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("生成失败")
+                persist("".join(buffer) or f"（生成失败：{type(exc).__name__}）", citations)
+                yield _sse("error", {"message": f"生成失败：{type(exc).__name__}: {exc}"})
+                return
+            finally:
+                # 只有"没跑完"才走这里（CancelledError / GeneratorExit）：客户端刷新或
+                # 关页时生成器被取消，此时存下已生成的部分并标注中断，用户回来能看个半截，
+                # 而不是整轮凭空消失。
+                if not finished and not saved:
+                    persist("".join(buffer) or "（本轮生成被中断）", citations)
 
-        answer = "".join(buffer)
+            answer = "".join(buffer)
         usage_info: dict = {}
         if answer.strip():
             usage_info = await _persist_and_housekeep(session_id, qseq, answer_mid, answer, citations)

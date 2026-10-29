@@ -22,6 +22,7 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import Entity, Novel
 from app.services.chat import memory
+from app.services.chat.intent import Intent, classify
 from app.services.graph import store as graph_store
 from app.services.llm.client import get_llm
 from app.services.retrieval.hybrid import build_context, retrieve
@@ -49,6 +50,26 @@ HISTORY_TURNS = memory.HISTORY_TURNS
 async def _history(session_id: str) -> list[dict]:
     """获取会话历史（完整回合，按 seq 排序）。"""
     return await memory.load_turns(session_id)
+
+
+def _irrelevant_result(question: str, reply: str):
+    """构造一个"无关 query"专用的空检索结果。
+
+    复用 RetrievalResult 契约，让 chat 路由的 meta 事件照常渲染（mode=irrelevant、
+    无 citations、degraded=True），reply 放在 detail 里回传。不碰数据库、不检索。
+    """
+    from app.services.retrieval.hybrid import RetrievalResult
+
+    return RetrievalResult(
+        query=question,
+        mode="irrelevant",
+        degraded=True,
+        detail={
+            "intent": "irrelevant",
+            "reply": reply,
+            "skipped": ["retrieval", "generation"],
+        },
+    )
 
 
 def _expand_query(question: str, entities: list[str]) -> list[str]:
@@ -130,7 +151,19 @@ async def _graph_facts(novel_id: str, question: str, extra_entities: list[str] |
 async def prepare(
     novel_id: str, question: str, session_id: str | None, *, use_graph: bool = True
 ) -> tuple[list[dict], object, str, list[dict], list[str], int]:
-    """返回 (messages, retrieval_result, session_id, graph_facts, ctx_entities, turn_count)。"""
+    """返回 (messages, retrieval_result, session_id, graph_facts, ctx_entities, turn_count)。
+
+    开头先过一遍意图路由：纯闲聊 / 无内容 / 明确离题的短句会被判 IRRELEVANT，
+    直接跳过检索与 LLM 生成，省一次召回 + 一次大模型调用。详见 `intent.py`。
+    """
+    intent, reply = classify(question)
+    if intent is Intent.IRRELEVANT:
+        logger.info("意图路由：无关 query，跳过检索与生成 q=%r", question[:30])
+        # 兼容 RetrievalResult 契约：mode 标 irrelevant、无 citations，
+        # reply 放在 detail 里让 chat 路由取走去当答案。
+        result = _irrelevant_result(question, reply)
+        return [], result, session_id or "", [], [], 0
+
     novel_title = ""
     async with SessionLocal() as db:
         novel = await db.get(Novel, novel_id)
