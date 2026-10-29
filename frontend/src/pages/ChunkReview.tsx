@@ -31,6 +31,12 @@ const CODE_DESC: Record<string, string> = {
   OVERLAP_ANOMALY: '重叠异常',
   DUP_CHUNK: '重复块',
   ENCODING_SUSPECT: '编码疑似错误',
+  CLEAN_HTML_TAGS: '清洗：HTML 标签',
+  CLEAN_HTML_ENTITIES: '清洗：HTML 转义实体',
+  CLEAN_ADS: '清洗：广告/求票语',
+  CLEAN_PAGE_NUMBERS: '清洗：页码/分页符',
+  CLEAN_REPEATED_LINES: '清洗：连续重复行',
+  CLEAN_PUNCTUATION: '清洗：半角标点转全角',
 }
 
 function Stat({

@@ -40,6 +40,7 @@ class ParseResult:
     encoding: str
     chapters: list[ChapterSpan] = field(default_factory=list)
     issues: list[dict] = field(default_factory=list)
+    clean_stats: dict[str, int] = field(default_factory=dict)
 
     @property
     def char_count(self) -> int:
@@ -155,15 +156,37 @@ def split_chapters(text: str) -> tuple[list[ChapterSpan], list[dict]]:
 def parse(raw: bytes) -> ParseResult:
     text, encoding = decode_bytes(raw)
     normalized = normalize(text)
-    chapters, issues = split_chapters(normalized)
-    if normalized.count("\ufffd"):
+    # 内容级清洗：在分章前对整篇文本做，保证 char_start/char_end 偏移一致，
+    # 且清洗后的文本回写为规范文本（下游切片、前端跳转都基于它）
+    from app.services.ingestion import cleaner
+
+    clean_res = cleaner.clean(normalized)
+    cleaned = clean_res.text
+    chapters, issues = split_chapters(cleaned)
+    # 清洗命中情况带进处理报告：每条规则一行汇总，位置标 0（跨章节）
+    if clean_res.stats:
+        from app.services.ingestion.cleaner import CLEAN_DESC
+
+        for rule, n in clean_res.stats.items():
+            issues.append(
+                {
+                    "code": f"CLEAN_{rule.upper()}",
+                    "severity": "info",
+                    "detail": f"清洗移除 {CLEAN_DESC.get(rule, rule)} {n} 处",
+                    "char_start": 0,
+                    "chapter_no": 0,
+                }
+            )
+    if cleaned.count("\ufffd"):
         issues.append(
             {
                 "code": "ENCODING_SUSPECT",
                 "severity": "error",
-                "detail": f"检测到 {normalized.count(chr(0xFFFD))} 个乱码替换符，编码判定可能错误（{encoding}）",
+                "detail": f"检测到 {cleaned.count(chr(0xFFFD))} 个乱码替换符，编码判定可能错误（{encoding}）",
                 "char_start": 0,
                 "chapter_no": 0,
             }
         )
-    return ParseResult(text=normalized, encoding=encoding, chapters=chapters, issues=issues)
+    return ParseResult(
+        text=cleaned, encoding=encoding, chapters=chapters, issues=issues, clean_stats=clean_res.stats
+    )

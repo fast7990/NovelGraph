@@ -79,6 +79,17 @@ class Settings(BaseSettings):
     chunk_parent_size: int = 1400
     chunk_child_size: int = 400
     chunk_overlap: int = 60
+
+    # ---- 数据清洗（上传解析阶段，normalize 之后、分章之前）----
+    # 目标是干掉网文 txt 里最典型的噪声；任一项都可单独关掉以规避误伤
+    clean_enabled: bool = True
+    clean_html_tags: bool = True          # 去掉 <br> / <p> 等残留标签
+    clean_html_entities: bool = True      # 解码 &nbsp; &amp; &#123; 等
+    clean_ads: bool = True                # 去掉求月票/请收藏/站外引流/作者附言等整行广告
+    clean_page_numbers: bool = True      # 去掉孤立的页码 / 分页符行
+    clean_repeated_lines: bool = True    # 折叠连续重复行（复制粘贴出错的典型症状）
+    clean_punctuation: bool = True       # 半角标点转全角（仅相邻 CJK 时，不动 "12:30"）
+    clean_max_repeat: int = 2             # 连续相同行保留到这个数量，超出丢弃
     retrieve_top_k: int = 20
     context_parents: int = 8
     enable_chapter_summary: bool = False

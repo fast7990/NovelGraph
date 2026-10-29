@@ -305,6 +305,7 @@ async def run_ingest(job_id: str) -> None:
                 "token_buckets": TOKEN_BUCKETS,
                 "issues_by_code": issue_summary,
                 "issue_total": len(issues),
+                "cleaning": result.clean_stats or {},
             }
             novel = await db.get(Novel, novel_id)
             novel.status = "READY"
